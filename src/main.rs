@@ -8,10 +8,14 @@ use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, peripherals, spim};
 use embassy_time::{Delay, Duration, Timer};
-use embedded_graphics::draw_target::DrawTarget;
+use embedded_graphics::mono_font::ascii::FONT_6X10;
+use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::Rgb565 as Rgb;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{Line, PrimitiveStyle};
+use embedded_graphics::primitives::Rectangle;
+use embedded_text::alignment::HorizontalAlignment;
+use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
+use embedded_text::TextBox;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
@@ -45,14 +49,22 @@ async fn main(_spawner: Spawner) {
     // create the ILI9486 display driver from the display interface and optional RST pin
     let mut display = mipidsi::Builder::st7789(di).init(&mut Delay, Some(rst)).unwrap();
 
+    let text = "10:42";
+
+    let character_style = MonoTextStyle::new(&FONT_6X10, Rgb::YELLOW);
+    let textbox_style = TextBoxStyleBuilder::new()
+        .height_mode(HeightMode::FitToText)
+        .alignment(HorizontalAlignment::Justified)
+        .paragraph_spacing(6)
+        .build();
+
+    let bounds = Rectangle::new(Point::zero(), Size::new(128, 0));
+
+    let text_box = TextBox::with_textbox_style(text, bounds, character_style, textbox_style);
+
+    text_box.draw(&mut display).unwrap();
+    info!("Rendering done");
     loop {
-        // Clear the display to black
-        display.clear(Rgb::BLACK).unwrap();
-        Timer::after(Duration::from_secs(1)).await;
-        let line = Line::new(Point::new(180, 160), Point::new(239, 239))
-            .into_styled(PrimitiveStyle::with_stroke(RgbColor::WHITE, 10));
-        line.draw(&mut display).unwrap();
         Timer::after(Duration::from_secs(5)).await;
-        info!("Rendering done");
     }
 }
