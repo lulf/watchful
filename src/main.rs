@@ -4,9 +4,12 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
+use embassy_futures::select::{select, Either};
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, peripherals, spim};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::MonoTextStyle;
@@ -26,6 +29,7 @@ bind_interrupts!(struct Irqs {
 async fn main(_spawner: Spawner) {
     let p = embassy_nrf::init(Default::default());
 
+    info!("Hello world");
     // Medium backlight
     let _backlight = Output::new(p.P0_22, Level::Low, OutputDrive::Standard);
 
@@ -62,9 +66,77 @@ async fn main(_spawner: Spawner) {
 
     let text_box = TextBox::with_textbox_style(text, bounds, character_style, textbox_style);
 
-    text_box.draw(&mut display).unwrap();
-    info!("Rendering done");
+    info!("Rendering started");
     loop {
-        Timer::after(Duration::from_secs(5)).await;
+        text_box.draw(&mut display).unwrap();
+        Timer::after(Duration::from_micros(5)).await;
     }
 }
+/*
+    let state = WatchState::Idle;
+    loop {
+        match state {
+            WatchState::Idle => {
+                info!("Idle state");
+                // Idle task wait for reactions
+                // select(wait_for_button, wait_for_touch, timeout)
+                state = WatchState::ViewTime
+            }
+            WatchState::ViewTime => {
+                // select(wait_for_button, wait_for_touch, timeout)
+                state = WatchState::ViewMenu;
+            }
+            WatchState::ViewMenu => {
+                // select(wait_for_button, wait_for_touch, timeout)
+                state = WatchState::Workout;
+            }
+            WatchState::Workout => {
+                // start pulse reading
+                // start accelerometer reading
+                // display exercise view
+                // refresh display until timout (go black)
+            }
+            WatchState::FindPhone => {
+                // try connecting to phone over BLE
+                // tell phone to make some noise
+            }
+        }
+        Timer::after(Duration::from_secs(5)).await;
+        // Main is the 'idle task'
+    }
+
+}
+
+pub enum WatchState {
+    Idle,
+    ViewTime,
+    ViewMenu,
+    FindPhone,
+    Workout,
+}
+
+pub enum ViewState {}
+
+pub type Signal = Signal<CriticalSectionRawMutex, Command>;
+pub enum Command {
+    Stop,
+}
+
+struct HealthTracker {}
+
+impl HealthTracker {
+    pub async fn run(&mut self) {}
+}
+
+#[embassy_executor::task]
+async fn exercise(signal: StopSignal, tracker: HealthTracker) {
+    loop {
+        match select(signal.wait(), tracker.run()).await {
+            Either::First(command) => match command {
+                Command::Stop => break,
+            },
+            Either::Second(_) => {}
+        }
+    }
+}
+*/
