@@ -11,14 +11,18 @@ use embassy_nrf::{bind_interrupts, peripherals, spim};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Delay, Duration, Timer};
-use embedded_graphics::mono_font::ascii::FONT_6X10;
+use embedded_graphics::image::{Image, ImageRawLE};
+use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10};
+use embedded_graphics::mono_font::iso_8859_15::FONT_9X18_BOLD;
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::pixelcolor::Rgb565 as Rgb;
+use embedded_graphics::pixelcolor::{BinaryColor, Rgb565 as Rgb};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
-use embedded_text::alignment::HorizontalAlignment;
+//use embedded_text::alignment::HorizontalAlignment;
 use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
 use embedded_text::TextBox;
+use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
+use u8g2_fonts::{fonts, FontRenderer};
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
@@ -51,26 +55,53 @@ async fn main(_spawner: Spawner) {
 
     let di = display_interface_spi::SPIInterfaceNoCS::new(spim, dc);
     // create the ILI9486 display driver from the display interface and optional RST pin
-    let mut display = mipidsi::Builder::st7789(di).init(&mut Delay, Some(rst)).unwrap();
+    let mut display = mipidsi::Builder::st7789(di)
+        .with_display_size(240, 240)
+        .init(&mut Delay, Some(rst))
+        .unwrap();
 
+    display.set_orientation(mipidsi::Orientation::Portrait(false)).unwrap();
+
+    /*
+    let raw_image_data = ImageRawLE::new(include_bytes!("../assets/ferris.raw"), 86);
+    let ferris = Image::new(&raw_image_data, Point::new(34, 8));
+
+    // draw image on black background
+    display.clear(Rgb::BLACK).unwrap();
+    ferris.draw(&mut display).unwrap();
+    loop {}*/
+    display.clear(Rgb::BLACK).unwrap();
     let text = "10:42";
 
-    let character_style = MonoTextStyle::new(&FONT_6X10, Rgb::YELLOW);
+    /*
+    let character_style = MonoTextStyle::new(&FONT_10X20, Rgb::YELLOW);
     let textbox_style = TextBoxStyleBuilder::new()
-        .height_mode(HeightMode::FitToText)
-        .alignment(HorizontalAlignment::Justified)
+        .height_mode(HeightMode::Exact(embedded_text::style::VerticalOverdraw::Hidden))
+        .alignment(HorizontalAlignment::Center)
+        .vertical_alignment(embedded_text::alignment::VerticalAlignment::Middle)
         .paragraph_spacing(6)
         .build();
 
-    let bounds = Rectangle::new(Point::zero(), Size::new(128, 0));
+    let bounds = Rectangle::new(Point::zero(), Size::new(240, 240));
 
     let text_box = TextBox::with_textbox_style(text, bounds, character_style, textbox_style);
+    text_box.draw(&mut display).unwrap();
+    */
+    //let font = FontRenderer::new::<fonts::u8g2_font_haxrcorp4089_t_cyrillic>();
+    let font = FontRenderer::new::<fonts::u8g2_font_spleen32x64_mu>();
 
-    info!("Rendering started");
-    loop {
-        text_box.draw(&mut display).unwrap();
-        Timer::after(Duration::from_micros(5)).await;
-    }
+    font.render_aligned(
+        text,
+        display.bounding_box().center() + Point::new(0, 0),
+        VerticalPosition::Baseline,
+        HorizontalAlignment::Center,
+        FontColor::Transparent(Rgb::YELLOW),
+        &mut display,
+    )
+    .unwrap();
+
+    // Show it for 10 seconds
+    Timer::after(Duration::from_secs(10)).await;
 }
 /*
     let state = WatchState::Idle;
