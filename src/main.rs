@@ -3,9 +3,12 @@
 #![feature(type_alias_impl_trait)]
 
 use defmt::info;
+use display_interface_spi::SPIInterfaceNoCS;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
-use embassy_nrf::gpio::{Level, Output, OutputDrive};
+use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
+use embassy_nrf::peripherals::{P0_18, P0_26, TWISPI0};
+use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, peripherals, spim};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -21,6 +24,7 @@ use embedded_graphics::primitives::Rectangle;
 //use embedded_text::alignment::HorizontalAlignment;
 use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
 use embedded_text::TextBox;
+use mipidsi::models::ST7789;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
 use {defmt_rtt as _, panic_probe as _};
@@ -34,6 +38,11 @@ async fn main(_spawner: Spawner) {
     let p = embassy_nrf::init(Default::default());
 
     info!("Hello world");
+    // Button enable
+    let _btn_enable = Output::new(p.P0_15, Level::High, OutputDrive::Standard);
+
+    let mut btn = Input::new(p.P0_13, Pull::Down);
+
     // Medium backlight
     let _backlight = Output::new(p.P0_22, Level::Low, OutputDrive::Standard);
 
@@ -70,8 +79,6 @@ async fn main(_spawner: Spawner) {
     display.clear(Rgb::BLACK).unwrap();
     ferris.draw(&mut display).unwrap();
     loop {}*/
-    display.clear(Rgb::BLACK).unwrap();
-    let text = "10:42";
 
     /*
     let character_style = MonoTextStyle::new(&FONT_10X20, Rgb::YELLOW);
@@ -88,6 +95,62 @@ async fn main(_spawner: Spawner) {
     text_box.draw(&mut display).unwrap();
     */
     //let font = FontRenderer::new::<fonts::u8g2_font_haxrcorp4089_t_cyrillic>();
+
+    let mut state = WatchState::Idle;
+    loop {
+        match state {
+            WatchState::Idle => {
+                info!("Idle state");
+                display.clear(Rgb::WHITE).unwrap();
+                btn.wait_for_any_edge().await;
+                if btn.is_high() {
+                    info!("Button pressed");
+                    state = WatchState::ViewTime;
+                } else {
+                    info!("Button not pressed");
+                }
+                // Idle task wait for reactions
+                // select(wait_for_button, wait_for_touch, timeout)
+            }
+            WatchState::ViewTime => {
+                display.clear(Rgb::BLACK).unwrap();
+                display_time(&mut display).await;
+                Timer::after(Duration::from_secs(5)).await;
+                // select(wait_for_button, wait_for_touch, timeout)
+                state = WatchState::Idle;
+            } /*  WatchState::ViewMenu => {
+                  // select(wait_for_button, wait_for_touch, timeout)
+                  state = WatchState::Workout;
+              }
+              WatchState::Workout => {
+                  // start pulse reading
+                  // start accelerometer reading
+                  // display exercise view
+                  // refresh display until timout (go black)
+              }
+              WatchState::FindPhone => {
+                  // try connecting to phone over BLE
+                  // tell phone to make some noise
+              }*/
+        }
+        // Main is the 'idle task'
+    }
+}
+
+pub enum WatchState {
+    Idle,
+    ViewTime,
+    //  ViewMenu,
+    //  FindPhone,
+    //  Workout,
+}
+
+type Display =
+    mipidsi::Display<SPIInterfaceNoCS<Spim<'static, TWISPI0>, Output<'static, P0_18>>, ST7789, Output<'static, P0_26>>;
+
+async fn display_time(display: &mut Display) {
+    //mipidsi::Display<DI, MODEL, RST>) {
+    let text = "10:42";
     let font = FontRenderer::new::<fonts::u8g2_font_spleen32x64_mu>();
 
     font.render_aligned(
@@ -96,56 +159,12 @@ async fn main(_spawner: Spawner) {
         VerticalPosition::Baseline,
         HorizontalAlignment::Center,
         FontColor::Transparent(Rgb::YELLOW),
-        &mut display,
+        display,
     )
     .unwrap();
-
-    // Show it for 10 seconds
-    Timer::after(Duration::from_secs(10)).await;
 }
+
 /*
-    let state = WatchState::Idle;
-    loop {
-        match state {
-            WatchState::Idle => {
-                info!("Idle state");
-                // Idle task wait for reactions
-                // select(wait_for_button, wait_for_touch, timeout)
-                state = WatchState::ViewTime
-            }
-            WatchState::ViewTime => {
-                // select(wait_for_button, wait_for_touch, timeout)
-                state = WatchState::ViewMenu;
-            }
-            WatchState::ViewMenu => {
-                // select(wait_for_button, wait_for_touch, timeout)
-                state = WatchState::Workout;
-            }
-            WatchState::Workout => {
-                // start pulse reading
-                // start accelerometer reading
-                // display exercise view
-                // refresh display until timout (go black)
-            }
-            WatchState::FindPhone => {
-                // try connecting to phone over BLE
-                // tell phone to make some noise
-            }
-        }
-        Timer::after(Duration::from_secs(5)).await;
-        // Main is the 'idle task'
-    }
-
-}
-
-pub enum WatchState {
-    Idle,
-    ViewTime,
-    ViewMenu,
-    FindPhone,
-    Workout,
-}
-
 pub enum ViewState {}
 
 pub type Signal = Signal<CriticalSectionRawMutex, Command>;
