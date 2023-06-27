@@ -100,7 +100,7 @@ async fn main(_spawner: Spawner) {
     loop {
         match state {
             WatchState::Idle => {
-                info!("Idle state");
+                // TODO: Power save
                 display.clear(Rgb::WHITE).unwrap();
                 btn.wait_for_any_edge().await;
                 if btn.is_high() {
@@ -116,7 +116,6 @@ async fn main(_spawner: Spawner) {
                 display.clear(Rgb::BLACK).unwrap();
                 display_time(&mut display).await;
                 Timer::after(Duration::from_secs(5)).await;
-                // select(wait_for_button, wait_for_touch, timeout)
                 state = WatchState::Idle;
             } /*  WatchState::ViewMenu => {
                   // select(wait_for_button, wait_for_touch, timeout)
