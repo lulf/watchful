@@ -12,12 +12,15 @@ embassy-time = { version = "0.1.0", features = ["defmt", "defmt-timestamp-uptime
 embassy-nrf = { version = "0.1.0", features = ["defmt", "nrf52832", "time-driver-rtc1", "gpiote", "nightly", "unstable-pac", "time"] }
 embedded-io = "0.4.0"
 
+nrf-softdevice = { version = "0.1.0", features = ["nightly", "defmt", "nrf52832", "s132", "ble-peripheral", "ble-central", "critical-section-impl"] }
+nrf-softdevice-s132 = { version = "0.1.1" }
+
 defmt = "0.3"
 defmt-rtt = "0.4"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 
 static_cell = "1.1"
-cortex-m = { version = "0.7.6", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m = { version = "0.7.6", features = ["inline-asm"] }
 cortex-m-rt = "0.7.0"
 mipidsi = { version = "0.7.1", default-features = false, features = ["heapless"] }
 display-interface = "0.4.1"
@@ -32,3 +35,5 @@ embassy-time = { git = "https://github.com/embassy-rs/embassy.git", branch = "ma
 embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
 embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
 embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
+nrf-softdevice = { git = "https://github.com/embassy-rs/nrf-softdevice.git", branch = "master" }
+nrf-softdevice-s132 = { git = "https://github.com/embassy-rs/nrf-softdevice.git", branch = "master" }
