@@ -850,6 +850,7 @@ dependencies = [
  "embedded-graphics",
  "embedded-io",
  "embedded-text",
+ "heapless",
  "mipidsi",
  "nrf-softdevice",
  "nrf-softdevice-s132",
@@ -1093,3 +1094,13 @@ checksum = "9ee8f19f9d74293faf70901bc20ad067dc1ad390d2cbf1e3f75f721ffee908b6"
 dependencies = [
  "vcell",
 ]
+
+[[patch.unused]]
+name = "embassy-boot"
+version = "0.1.1"
+source = "git+https://github.com/embassy-rs/embassy.git?branch=main#45561f1622c9d883c8a9fa990c22a8a373d6ce5e"
+
+[[patch.unused]]
+name = "embassy-boot-nrf"
+version = "0.1.0"
+source = "git+https://github.com/embassy-rs/embassy.git?branch=main#45561f1622c9d883c8a9fa990c22a8a373d6ce5e"
