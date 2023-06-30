@@ -2,7 +2,9 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use defmt::info;
+use core::cell::RefCell;
+
+use defmt::{info, warn};
 use display_interface_spi::SPIInterfaceNoCS;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
@@ -49,6 +51,8 @@ struct NrfDfuService {
     /// making the maximum size of the DFU Packet characteristic 253 bytes. (3 bytes are used for opcode and handle ID upon writing.)
     #[characteristic(uuid = "8EC90002-F315-4F60-9FB8-838830DAEA50", write, notify)]
     packet: Vec<u8, ATT_MTU>,
+
+    target: RefCell<DfuTarget>,
 }
 
 struct DfuConnection {
@@ -102,85 +106,307 @@ pub enum DfuRequest<'m> {
     Abort,
 }
 
-impl DfuRequest {
-    fn parse(data: &[u8]) -> Result<(Self, &[u8]), ()> {
-        if data.is_empty() {
-            Err(())
+struct ReadBuf<'m> {
+    data: &'m [u8],
+    pos: usize,
+}
+
+impl<'m> ReadBuf<'m> {
+    fn new(data: &'m [u8]) -> ReadBuf<'m> {
+        Self { data, pos: 0 }
+    }
+
+    fn decode_u8(&mut self) -> Result<u8, ()> {
+        if self.data.len() - self.pos >= 1 {
+            let b = self.data[self.pos];
+            self.pos += 1;
+            Ok(b)
         } else {
-            let op = data[0];
-            data = &data[1..];
-            let req = match op {
-                0x00 => Ok((Self::ProtocolVersion, data)),
-                0x01 => {
-                    if data.len() < 5 {
-                        Err(())
-                    } else {
-                        let obj_type = ObjectType::try_from(data[0])?;
-                        let obj_size = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+            Err(())
+        }
+    }
 
-                        Ok((Self::Create {
-                            obj_type,
-                            obj_size
-                        }, &data[5..]))
-                    }
-                }
-                0x02 => {
-                    if data.len() < 2 {
-                        Err(())
-                    } else {
-                        let target = u16::from_le_bytes([data[0], data[1]]);
-                        Ok((Self::SetReceiptNotification {
-                            target
-                        }, &data[2..]))
-                    }
-                }
-                0x03 => Ok((Self::Crc, data)),
-                0x04 => Ok((Self::Execute, data)),
-                0x06 => {
-                    if data.len() < 1 {
-                        Err(())
-                    } else {
-                        let obj_type = ObjectType::try_from(data[0])?;
-                        Ok((Self::Select {
-                            obj_type
-                        }, &data[1..]))
-                    }
-                }
-                0x07 => Ok((Self::MtuGet, data)),
-                0x08 => Ok((Self::Write {
-                        data
-                    }, &data[data.len()..])),
-                0x09 => {
-                    if data.len() < 1 {
-                        Err(())
+    fn decode_u16(&mut self) -> Result<u16, ()> {
+        if self.data.len() - self.pos >= 2 {
+            let b = u16::from_le_bytes([self.data[self.pos], self.data[self.pos + 1]]);
+            self.pos += 2;
+            Ok(b)
+        } else {
+            Err(())
+        }
+    }
 
-                    } else {
-                        let id = data[0];
-                        Ok((Self::Ping {
-                            id
-                        }, &data[1..]))
-                    }
-                }
-                0x0A => Ok((Self::HwVersion, data)),
-                0x0B => {
-                    if data.len() < 1 {
-                        Err(())
-                    } else {
-                        let image_id = data[0];
-                        Ok((Self::FwVersion {
-                            image_id
-                        }, &data[1..]))
-                    }
-                }
-                0x0C => Ok((Self::Abort, data)),
-                _ => Err(()),
+    fn decode_u32(&mut self) -> Result<u32, ()> {
+        if self.data.len() - self.pos >= 4 {
+            let b = u32::from_le_bytes([
+                self.data[self.pos],
+                self.data[self.pos + 1],
+                self.data[self.pos + 2],
+                self.data[self.pos + 3],
+            ]);
+            self.pos += 4;
+            Ok(b)
+        } else {
+            Err(())
+        }
+    }
+
+    fn slice(&'m self) -> &'m [u8] {
+        let s = &self.data[self.pos..];
+        self.pos += s.len();
+        s
+    }
+
+    fn release(self) -> &'m [u8] {
+        &self.data[self.pos..]
+    }
+}
+
+struct WriteBuf<'m> {
+    data: &'m mut [u8],
+    pos: usize,
+}
+
+impl<'m> WriteBuf<'m> {
+    fn new(data: &'m mut [u8]) -> WriteBuf<'m> {
+        Self { data, pos: 0 }
+    }
+
+    fn encode_u8(&mut self, value: u8) -> Result<(), ()> {
+        if self.data.len() - self.pos >= 1 {
+            self.data[self.pos] = value;
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn encode_u16(&mut self, value: u16) -> Result<(), ()> {
+        if self.data.len() - self.pos >= 2 {
+            let d = value.to_le_bytes();
+            self.data[self.pos] = d[0];
+            self.data[self.pos + 1] = d[1];
+            self.pos += 2;
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn encode_u32(&mut self, value: u32) -> Result<(), ()> {
+        if self.data.len() - self.pos >= 4 {
+            let d = value.to_le_bytes();
+            self.data[self.pos] = d[0];
+            self.data[self.pos + 1] = d[1];
+            self.data[self.pos + 2] = d[2];
+            self.data[self.pos + 3] = d[3];
+            self.pos += 4;
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn release(self) -> usize {
+        self.pos
+    }
+}
+
+impl<'m> DfuRequest<'m> {
+    fn decode(data: &'m [u8]) -> Result<(DfuRequest<'m>, &'m [u8]), ()> {
+        let mut data = ReadBuf::new(data);
+        let op = data.decode_u8()?;
+        let req = match op {
+            0x00 => Ok(Self::ProtocolVersion),
+            0x01 => {
+                let obj_type = ObjectType::try_from(data.decode_u8()?)?;
+                let obj_size = data.decode_u32()?;
+
+                Ok(Self::Create { obj_type, obj_size })
             }
+            0x02 => {
+                let target = data.decode_u16()?;
+                Ok(Self::SetReceiptNotification { target })
+            }
+            0x03 => Ok(Self::Crc),
+            0x04 => Ok(Self::Execute),
+            0x06 => {
+                let obj_type = ObjectType::try_from(data.decode_u8()?)?;
+                Ok(Self::Select { obj_type })
+            }
+            0x07 => Ok(Self::MtuGet),
+            0x08 => Ok(Self::Write { data: data.slice() }),
+            0x09 => {
+                let id = data.decode_u8()?;
+                Ok(Self::Ping { id })
+            }
+            0x0A => Ok(Self::HwVersion),
+            0x0B => {
+                let image_id = data.decode_u8()?;
+                Ok(Self::FwVersion { image_id })
+            }
+            0x0C => Ok(Self::Abort),
+            _ => Err(()),
+        }?;
+
+        Ok((req, data.release()))
+    }
+}
+
+pub enum DfuResponse {
+    ProtocolVersion {
+        version: u8,
+    },
+    Crc {
+        offset: u32,
+        crc: u32,
+    },
+    Select {
+        offset: u32,
+        crc: u32,
+        max_size: u32,
+    },
+    Write {
+        crc: u32,
+    },
+    Ping {
+        id: u8,
+    },
+    HwVersion {
+        part: u32,
+        variant: u32,
+        rom_size: u32,
+        ram_size: u32,
+        rom_page_size: u32,
+    },
+    FwVersion {
+        ftype: FirmwareType,
+        version: u32,
+        addr: u32,
+        len: u32,
+    },
+}
+
+impl DfuResponse {
+    fn encode(&self, buf: &mut [u8]) -> Result<usize, ()> {
+        let buf = WriteBuf::new(buf);
+        match &self {
+            DfuResponse::ProtocolVersion { version } => buf.encode_u8(*version)?,
+            DfuResponse::Crc { offset, crc } => {
+                buf.encode_u32(*offset)?;
+                buf.encode_u32(*crc)?;
+            }
+            DfuResponse::Select { offset, crc, max_size } => {
+                buf.encode_u32(*offset)?;
+                buf.encode_u32(*crc)?;
+                buf.encode_u32(*max_size)?;
+            }
+            DfuResponse::Write { crc } => {
+                buf.encode_u32(*crc)?;
+            }
+            DfuResponse::Ping { id } => {
+                buf.encode_u8(*id)?;
+            }
+            DfuResponse::HwVersion {
+                part,
+                variant,
+                rom_size,
+                ram_size,
+                rom_page_size,
+            } => {
+                buf.encode_u32(*part)?;
+                buf.encode_u32(*variant)?;
+                buf.encode_u32(*rom_size)?;
+                buf.encode_u32(*ram_size)?;
+                buf.encode_u32(*rom_page_size)?;
+            }
+            DfuResponse::FwVersion {
+                ftype,
+                version,
+                addr,
+                len,
+            } => {
+                buf.encode_u8((*ftype).into())?;
+                buf.encode_u32(*version)?;
+                buf.encode_u32(*addr)?;
+                buf.encode_u32(*len)?;
+            }
+        }
+        Ok(buf.release())
+    }
+}
+
+pub enum FirmwareType {
+    Softdevice,
+    Application,
+    Bootloader,
+    Unknown,
+}
+
+impl Into<u8> for FirmwareType {
+    fn into(self) -> u8 {
+        match self {
+            Self::Softdevice => 0x00,
+            Self::Application => 0x01,
+            Self::Bootloader => 0x02,
+            Self::Unknown => 0xFF,
         }
     }
 }
 
 enum DfuState {
+    WaitForData,
+    ReceiveFirmware,
+    Validate,
+}
 
+pub struct DfuTarget {
+    crc_receipt_interval: u16,
+    crc: u32,
+    current: Object,
+}
+
+pub struct Object {
+    obj_type: ObjectType,
+    offset: u32,
+    size: u32,
+}
+
+impl DfuTarget {
+    fn process<'m>(&mut self, request: DfuRequest<'m>) -> Result<Option<DfuResponse>, ()> {
+        match request {
+            DfuRequest::ProtocolVersion => Ok(Some(DfuResponse::ProtocolVersion {
+                version: NRF_DFU_PROTOCOL_VERSION,
+            })),
+            DfuRequest::Create { obj_type, obj_size } => {
+                self.current = Object {
+                    obj_type,
+                    size: obj_size,
+                    offset: 0,
+                };
+                Ok(None)
+            }
+            DfuRequest::SetReceiptNotification { target } => {
+                self.crc_receipt_interval = target;
+                Ok(None)
+            }
+            DfuRequest::Crc => Ok(Some(DfuResponse::Crc {
+                offset: self.current.offset,
+                crc: self.crc,
+            })),
+            DfuRequest::Execute => {
+                // TODO: If transfer complete, validate and swap
+                Ok(None)
+            }
+            DfuRequest::Select { obj_type } => if self.current.obj_type != obj_type {},
+            DfuRequest::MtuGet => todo!(),
+            DfuRequest::Write { data } => todo!(),
+            DfuRequest::Ping { id } => todo!(),
+            DfuRequest::HwVersion => todo!(),
+            DfuRequest::FwVersion { image_id } => todo!(),
+            DfuRequest::Abort => todo!(),
+        }
+    }
 }
 
 impl NrfDfuService {
@@ -190,97 +416,46 @@ impl NrfDfuService {
         }
     }
 
-    fn dispatch(&self, conn: &mut DfuConnection, request: DfuRequest) {
+    fn process(&self, conn: &mut DfuConnection, request: DfuRequest) {
+        let mut target = self.target.borrow_mut();
+        match target.process(request) {
+            Ok(Some(response)) => {
+                if conn.notify_control {
+                    let mut buf: [u8; 32] = [0; 32];
+                    match response.encode(&mut buf[..]) {
+                        Ok(len) => {
+                            self.control_notify(&conn.connection, &Vec::from_slice(&buf[..len]).unwrap());
+                        }
+                        Err(e) => {
+                            warn!("Error encoding DFU response");
+                        }
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(_) => {
+                warn!("Error processing DFU requst");
+            }
+        }
     }
 
     fn handle(&self, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
         match event {
             NrfDfuServiceEvent::ControlWrite(data) => {
                 if let Ok((request, _)) = DfuRequest::parse(&data) {
-                    self.dispatch(connection, request);
+                    self.process(connection, request);
                 }
             }
             NrfDfuServiceEvent::ControlCccdWrite { notifications } => {
                 connection.notify_control = notifications;
             }
             NrfDfuServiceEvent::PacketWrite(data) => {
-                let request = DfuRequest::Write {
-                    data: &data[..],
-                };
+                let request = DfuRequest::Write { data: &data[..] };
                 self.dispatch(connection, request);
             }
             NrfDfuServiceEvent::PacketCccdWrite { notifications } => {
                 connection.notify_packet = notifications;
             }
-        }
-    }
-}
-
-pub enum DfuOp {
-    ProtocolVersion,
-    Create,
-    SetReceiptNotification,
-    Crc,
-    Execute,
-    Select,
-    MtuGet,
-    Write,
-    Ping,
-    HwVersionGet,
-    FwVersion,
-    Get,
-    Abort,
-}
-
-impl DfuOp {
-    fn parse(data: &[u8]) -> Result<(Self, &[u8]), ()> {
-        if data.is_empty() {
-            Err(())
-        } else {
-            let op = Self::try_from(data[0])?;
-            Ok((op, &data[1..]))
-        }
-    }
-}
-
-impl TryFrom<u8> for DfuOp {
-    type Error = ();
-    fn try_from(op: u8) -> Result<Self, Self::Error> {
-        match op {
-            0x00 => Ok(Self::ProtocolVersion),
-            0x01 => Ok(Self::Create),
-            0x02 => Ok(Self::SetReceiptNotification),
-            0x03 => Ok(Self::Crc),
-            0x04 => Ok(Self::Execute),
-            0x05 => Ok(Self::Select),
-            0x06 => Ok(Self::MtuGet),
-            0x07 => Ok(Self::Write),
-            0x08 => Ok(Self::Ping),
-            0x09 => Ok(Self::HwVersionGet),
-            0x0A => Ok(Self::FwVersion),
-            0x0B => Ok(Self::Get),
-            0x0C => Ok(Self::Abort),
-            _ => Err(()),
-        }
-    }
-}
-
-impl Into<u8> for DfuOp {
-    fn into(self) -> u8 {
-        match self {
-            Self::ProtocolVersion => 0x00,
-            Self::Create => 0x01,
-            Self::SetReceiptNotification => 0x02,
-            Self::Crc => 0x03,
-            Self::Execute => 0x04,
-            Self::Select => 0x05,
-            Self::MtuGet => 0x06,
-            Self::Write => 0x07,
-            Self::Ping => 0x08,
-            Self::HwVersionGet => 0x09,
-            Self::FwVersion => 0x0A,
-            Self::Get => 0x0B,
-            Self::Abort => 0x0C,
         }
     }
 }
@@ -291,7 +466,7 @@ struct PineTimeServer {
 }
 
 impl PineTimeServer {
-    fn handle(&self, conn: &Connection, event: PineTimeServerEvent) {
+    fn handle(&self, conn: &mut DfuConnection, event: PineTimeServerEvent) {
         match event {
             PineTimeServerEvent::Dfu(event) => self.dfu.handle(conn, event),
         }
