@@ -13,7 +13,7 @@ use embassy_nrf::interrupt::Priority;
 use embassy_nrf::peripherals::{P0_18, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
-use embassy_nrf::{bind_interrupts, peripherals, spim};
+use embassy_nrf::{bind_interrupts, pac, peripherals, spim};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Delay, Duration, Timer};
@@ -29,8 +29,10 @@ use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
 use embedded_text::TextBox;
 use heapless::Vec;
 use mipidsi::models::ST7789;
-use nrf_softdevice::ble::{gatt_server, peripheral, Connection};
+use nrf_softdevice::ble::gatt_server::NotifyValueError;
+use nrf_softdevice::ble::{gatt_server, peripheral, Connection, DisconnectedError};
 use nrf_softdevice::{gatt_server, raw, Softdevice};
+use static_cell::StaticCell;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
 use {defmt_rtt as _, panic_probe as _};
@@ -42,7 +44,7 @@ bind_interrupts!(struct Irqs {
 const ATT_MTU: usize = 32;
 
 #[nrf_softdevice::gatt_service(uuid = "FE59")]
-struct NrfDfuService {
+pub struct NrfDfuService {
     #[characteristic(uuid = "8EC90001-F315-4F60-9FB8-838830DAEA50", write, notify)]
     control: Vec<u8, ATT_MTU>,
 
@@ -51,8 +53,6 @@ struct NrfDfuService {
     /// making the maximum size of the DFU Packet characteristic 253 bytes. (3 bytes are used for opcode and handle ID upon writing.)
     #[characteristic(uuid = "8EC90002-F315-4F60-9FB8-838830DAEA50", write, notify)]
     packet: Vec<u8, ATT_MTU>,
-
-    target: RefCell<DfuTarget>,
 }
 
 struct DfuConnection {
@@ -63,7 +63,8 @@ struct DfuConnection {
 
 const NRF_DFU_PROTOCOL_VERSION: u8 = 0x01;
 
-enum ObjectType {
+#[derive(Copy, Clone, Debug)]
+pub enum ObjectType {
     Invalid = 0,
     Command = 1,
     Data = 2,
@@ -151,7 +152,7 @@ impl<'m> ReadBuf<'m> {
         }
     }
 
-    fn slice(&'m self) -> &'m [u8] {
+    fn slice(&mut self) -> &'m [u8] {
         let s = &self.data[self.pos..];
         self.pos += s.len();
         s
@@ -266,6 +267,9 @@ pub enum DfuResponse {
         crc: u32,
         max_size: u32,
     },
+    Mtu {
+        mtu: u16,
+    },
     Write {
         crc: u32,
     },
@@ -289,7 +293,7 @@ pub enum DfuResponse {
 
 impl DfuResponse {
     fn encode(&self, buf: &mut [u8]) -> Result<usize, ()> {
-        let buf = WriteBuf::new(buf);
+        let mut buf = WriteBuf::new(buf);
         match &self {
             DfuResponse::ProtocolVersion { version } => buf.encode_u8(*version)?,
             DfuResponse::Crc { offset, crc } => {
@@ -300,6 +304,9 @@ impl DfuResponse {
                 buf.encode_u32(*offset)?;
                 buf.encode_u32(*crc)?;
                 buf.encode_u32(*max_size)?;
+            }
+            DfuResponse::Mtu { mtu } => {
+                buf.encode_u16(*mtu)?;
             }
             DfuResponse::Write { crc } => {
                 buf.encode_u32(*crc)?;
@@ -336,6 +343,7 @@ impl DfuResponse {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub enum FirmwareType {
     Softdevice,
     Application,
@@ -362,28 +370,64 @@ enum DfuState {
 
 pub struct DfuTarget {
     crc_receipt_interval: u16,
-    crc: u32,
-    current: Object,
+    receipt_count: usize,
+    objects: [Object; 2],
+    current: usize,
 }
 
 pub struct Object {
     obj_type: ObjectType,
     offset: u32,
+    crc: u32,
     size: u32,
 }
 
+const DFU_MTU: u16 = 32;
+
 impl DfuTarget {
+    pub fn new() -> Self {
+        Self {
+            crc_receipt_interval: 0,
+            receipt_count: 0,
+            objects: [
+                Object {
+                    obj_type: ObjectType::Command,
+                    offset: 0,
+                    crc: 0,
+                    size: 0,
+                },
+                Object {
+                    obj_type: ObjectType::Data,
+                    offset: 0,
+                    crc: 0,
+                    size: 0,
+                },
+            ],
+            current: 0,
+        }
+    }
+
     fn process<'m>(&mut self, request: DfuRequest<'m>) -> Result<Option<DfuResponse>, ()> {
         match request {
             DfuRequest::ProtocolVersion => Ok(Some(DfuResponse::ProtocolVersion {
                 version: NRF_DFU_PROTOCOL_VERSION,
             })),
             DfuRequest::Create { obj_type, obj_size } => {
-                self.current = Object {
-                    obj_type,
-                    size: obj_size,
-                    offset: 0,
+                let idx = match obj_type {
+                    ObjectType::Command => Some(0),
+
+                    ObjectType::Data => Some(1),
+                    _ => None,
                 };
+                if let Some(idx) = idx {
+                    self.objects[idx] = Object {
+                        obj_type,
+                        size: obj_size,
+                        offset: 0,
+                        crc: 0,
+                    };
+                    self.current = idx;
+                }
                 Ok(None)
             }
             DfuRequest::SetReceiptNotification { target } => {
@@ -391,59 +435,130 @@ impl DfuTarget {
                 Ok(None)
             }
             DfuRequest::Crc => Ok(Some(DfuResponse::Crc {
-                offset: self.current.offset,
-                crc: self.crc,
+                offset: self.objects[self.current].offset,
+                crc: self.objects[self.current].crc,
             })),
             DfuRequest::Execute => {
                 // TODO: If transfer complete, validate and swap
                 Ok(None)
             }
-            DfuRequest::Select { obj_type } => if self.current.obj_type != obj_type {},
-            DfuRequest::MtuGet => todo!(),
-            DfuRequest::Write { data } => todo!(),
-            DfuRequest::Ping { id } => todo!(),
-            DfuRequest::HwVersion => todo!(),
-            DfuRequest::FwVersion { image_id } => todo!(),
-            DfuRequest::Abort => todo!(),
+            DfuRequest::Select { obj_type } => {
+                let idx = match obj_type {
+                    ObjectType::Command => Some(0),
+
+                    ObjectType::Data => Some(1),
+                    _ => None,
+                };
+                if let Some(idx) = idx {
+                    Ok(Some(DfuResponse::Select {
+                        offset: self.objects[idx].offset,
+                        crc: self.objects[idx].crc,
+                        max_size: self.objects[idx].size,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+
+            DfuRequest::MtuGet => Ok(Some(DfuResponse::Mtu { mtu: DFU_MTU })),
+            DfuRequest::Write { data } => {
+                self.receipt_count += 1;
+                if self.crc_receipt_interval > 0 {
+                    let obj = &self.objects[self.current];
+                    self.receipt_count = 0;
+                    Ok(Some(DfuResponse::Crc {
+                        offset: obj.offset,
+                        crc: obj.crc,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+            DfuRequest::Ping { id } => Ok(Some(DfuResponse::Ping { id })),
+            DfuRequest::HwVersion => {
+                let p = unsafe { pac::Peripherals::steal() };
+                let part = p.FICR.info.part.read().part().bits();
+                let variant = p.FICR.info.variant.read().variant().bits();
+                let rom_size = 12345;
+                let ram_size = 5678;
+                let rom_page_size = 4096;
+                Ok(Some(DfuResponse::HwVersion {
+                    part,
+                    variant,
+                    rom_size,
+                    ram_size,
+                    rom_page_size,
+                }))
+            }
+            DfuRequest::FwVersion { image_id } => {
+                let ftype = FirmwareType::Application;
+                let version = 0;
+                let addr = 0;
+                let len = 1024;
+                Ok(Some(DfuResponse::FwVersion {
+                    ftype,
+                    version,
+                    addr,
+                    len,
+                }))
+            }
+            DfuRequest::Abort => {
+                self.objects[0].crc = 0;
+                self.objects[0].offset = 0;
+                self.objects[1].crc = 0;
+                self.objects[1].offset = 0;
+                self.receipt_count = 0;
+                Ok(None)
+            }
         }
     }
 }
 
 impl NrfDfuService {
-    fn respond_control(&self, conn: &mut DfuConnection, response: &[u8]) {
-        if conn.notify_control {
-            self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap());
-        }
-    }
-
-    fn process(&self, conn: &mut DfuConnection, request: DfuRequest) {
-        let mut target = self.target.borrow_mut();
+    fn process<F: FnOnce(&DfuConnection, &[u8]) -> Result<(), NotifyValueError>>(
+        &self,
+        target: &mut DfuTarget,
+        conn: &mut DfuConnection,
+        request: DfuRequest,
+        notify: F,
+    ) {
         match target.process(request) {
             Ok(Some(response)) => {
-                if conn.notify_control {
-                    let mut buf: [u8; 32] = [0; 32];
-                    match response.encode(&mut buf[..]) {
-                        Ok(len) => {
-                            self.control_notify(&conn.connection, &Vec::from_slice(&buf[..len]).unwrap());
+                let mut buf: [u8; 32] = [0; 32];
+                match response.encode(&mut buf[..]) {
+                    Ok(len) => match notify(&conn, &buf[..len]) {
+                        Ok(_) => {
+                            info!("Notification sent successfully");
                         }
                         Err(e) => {
-                            warn!("Error encoding DFU response");
+                            warn!("Error sending notification: {:?}", e);
                         }
+                    },
+                    Err(e) => {
+                        warn!("Error encoding DFU response");
                     }
                 }
             }
-            Ok(None) => {}
+            Ok(None) => {
+                info!("No response for request");
+            }
             Err(_) => {
                 warn!("Error processing DFU requst");
             }
         }
     }
 
-    fn handle(&self, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
+    fn handle(&self, target: &mut DfuTarget, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
         match event {
             NrfDfuServiceEvent::ControlWrite(data) => {
-                if let Ok((request, _)) = DfuRequest::parse(&data) {
-                    self.process(connection, request);
+                if let Ok((request, _)) = DfuRequest::decode(&data) {
+                    self.process(target, connection, request, |conn, response| {
+                        if conn.notify_control {
+                            self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())
+                        } else {
+                            Ok(())
+                        }
+                    });
                 }
             }
             NrfDfuServiceEvent::ControlCccdWrite { notifications } => {
@@ -451,7 +566,13 @@ impl NrfDfuService {
             }
             NrfDfuServiceEvent::PacketWrite(data) => {
                 let request = DfuRequest::Write { data: &data[..] };
-                self.dispatch(connection, request);
+                self.process(target, connection, request, |conn, response| {
+                    if conn.notify_packet {
+                        self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())
+                    } else {
+                        Ok(())
+                    }
+                });
             }
             NrfDfuServiceEvent::PacketCccdWrite { notifications } => {
                 connection.notify_packet = notifications;
@@ -461,24 +582,37 @@ impl NrfDfuService {
 }
 
 #[nrf_softdevice::gatt_server]
-struct PineTimeServer {
+pub struct PineTimeServer {
     dfu: NrfDfuService,
 }
 
 impl PineTimeServer {
-    fn handle(&self, conn: &mut DfuConnection, event: PineTimeServerEvent) {
+    fn handle(&self, target: &mut DfuTarget, conn: &mut DfuConnection, event: PineTimeServerEvent) {
         match event {
-            PineTimeServerEvent::Dfu(event) => self.dfu.handle(conn, event),
+            PineTimeServerEvent::Dfu(event) => self.dfu.handle(target, conn, event),
         }
     }
 }
 
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+async fn main(s: Spawner) {
     let mut config = embassy_nrf::config::Config::default();
     config.gpiote_interrupt_priority = Priority::P2;
     config.time_interrupt_priority = Priority::P2;
     let p = embassy_nrf::init(config);
+
+    let sd = enable_softdevice("Pinetime Embassy");
+
+    static GATT: StaticCell<PineTimeServer> = StaticCell::new();
+    let server = GATT.init(PineTimeServer::new(sd).unwrap());
+
+    s.spawn(softdevice_task(sd)).unwrap();
+
+    static TARGET: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<DfuTarget>>> = StaticCell::new();
+    let target = TARGET.init(Mutex::new(RefCell::new(DfuTarget::new())));
+
+    s.spawn(advertiser_task(s, sd, server, target, "Pinetime Embassy"))
+        .unwrap();
 
     info!("Hello world");
     // Button enable
@@ -604,6 +738,105 @@ async fn display_time(display: &mut Display) {
         display,
     )
     .unwrap();
+}
+
+#[embassy_executor::task(pool_size = "4")]
+pub async fn gatt_server_task(
+    sd: &'static Softdevice,
+    conn: Connection,
+    server: &'static PineTimeServer,
+    target: &'static Mutex<CriticalSectionRawMutex, RefCell<DfuTarget>>,
+) {
+    let mut dfu_conn = DfuConnection {
+        connection: conn.clone(),
+        notify_control: false,
+        notify_packet: false,
+    };
+
+    loop {
+        let target = target.lock().await;
+        let mut target = target.borrow_mut();
+        let _ = gatt_server::run(&conn, server, |e| server.handle(&mut target, &mut dfu_conn, e)).await;
+        info!("Disconnected");
+    }
+}
+
+use embassy_sync::mutex::Mutex;
+
+#[embassy_executor::task]
+pub async fn advertiser_task(
+    spawner: Spawner,
+    sd: &'static Softdevice,
+    server: &'static PineTimeServer,
+    target: &'static Mutex<CriticalSectionRawMutex, RefCell<DfuTarget>>,
+    name: &'static str,
+) {
+    let mut adv_data: Vec<u8, 31> = Vec::new();
+    #[rustfmt::skip]
+    adv_data.extend_from_slice(&[
+        0x02, 0x01, raw::BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE as u8,
+        0x03, 0x03, 0xFE, 0x59,
+        (1 + name.len() as u8), 0x09]).unwrap();
+
+    adv_data.extend_from_slice(name.as_bytes()).ok().unwrap();
+
+    #[rustfmt::skip]
+    let scan_data = &[
+        0x03, 0x03, 0x0A, 0x18,
+    ];
+
+    loop {
+        let config = peripheral::Config::default();
+        let adv = peripheral::ConnectableAdvertisement::ScannableUndirected {
+            adv_data: &adv_data[..],
+            scan_data,
+        };
+        info!("Advertising");
+        let conn = peripheral::advertise_connectable(sd, adv, &config).await.unwrap();
+
+        info!("connection established");
+        if let Err(e) = spawner.spawn(gatt_server_task(sd, conn, server, target)) {
+            defmt::info!("Error spawning gatt task: {:?}", e);
+        }
+    }
+}
+
+fn enable_softdevice(name: &'static str) -> &'static mut Softdevice {
+    let config = nrf_softdevice::Config {
+        clock: Some(raw::nrf_clock_lf_cfg_t {
+            source: raw::NRF_CLOCK_LF_SRC_RC as u8,
+            rc_ctiv: 4,
+            rc_temp_ctiv: 2,
+            accuracy: 7,
+        }),
+        conn_gap: Some(raw::ble_gap_conn_cfg_t {
+            conn_count: 2,
+            event_length: 24,
+        }),
+        conn_gatt: Some(raw::ble_gatt_conn_cfg_t { att_mtu: 128 }),
+        gatts_attr_tab_size: Some(raw::ble_gatts_cfg_attr_tab_size_t { attr_tab_size: 32768 }),
+        gap_role_count: Some(raw::ble_gap_cfg_role_count_t {
+            adv_set_count: 1,
+            periph_role_count: 3,
+            central_role_count: 1,
+            central_sec_count: 1,
+            _bitfield_1: Default::default(),
+        }),
+        gap_device_name: Some(raw::ble_gap_cfg_device_name_t {
+            p_value: name.as_ptr() as *const u8 as _,
+            current_len: name.len() as u16,
+            max_len: name.len() as u16,
+            write_perm: unsafe { core::mem::zeroed() },
+            _bitfield_1: raw::ble_gap_cfg_device_name_t::new_bitfield_1(raw::BLE_GATTS_VLOC_STACK as u8),
+        }),
+        ..Default::default()
+    };
+    Softdevice::enable(&config)
+}
+
+#[embassy_executor::task]
+async fn softdevice_task(sd: &'static Softdevice) {
+    sd.run().await;
 }
 
 /*

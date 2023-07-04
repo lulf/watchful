@@ -12,7 +12,7 @@ embassy-time = { version = "0.1.0", features = ["defmt", "defmt-timestamp-uptime
 embassy-nrf = { version = "0.1.0", features = ["defmt", "nrf52832", "time-driver-rtc1", "gpiote", "nightly", "unstable-pac", "time"] }
 embedded-io = "0.4.0"
 
-nrf-softdevice = { version = "0.1.0", features = ["nightly", "defmt", "nrf52832", "s132", "ble-gatt-server", "ble-peripheral", "ble-central", "critical-section-impl"] }
+nrf-softdevice = { version = "0.1.0", features = ["nightly", "defmt", "nrf52832", "s132", "ble-gatt-server", "ble-peripheral", "critical-section-impl"] }
 nrf-softdevice-s132 = { version = "0.1.1" }
 
 defmt = "0.3"
