@@ -1,10 +1,11 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
 use core::cell::RefCell;
 
-use defmt::{info, warn};
+use defmt::{info, warn, Format};
+use dfu::*;
 use display_interface_spi::SPIInterfaceNoCS;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
@@ -37,6 +38,9 @@ use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
 use {defmt_rtt as _, panic_probe as _};
 
+mod crc;
+mod dfu;
+
 bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
 });
@@ -61,457 +65,10 @@ struct DfuConnection {
     pub notify_packet: bool,
 }
 
-const NRF_DFU_PROTOCOL_VERSION: u8 = 0x01;
-
-#[derive(Copy, Clone, Debug)]
-pub enum ObjectType {
-    Invalid = 0,
-    Command = 1,
-    Data = 2,
-}
-
-impl TryFrom<u8> for ObjectType {
-    type Error = ();
-    fn try_from(t: u8) -> Result<Self, Self::Error> {
-        match t {
-            0 => Ok(Self::Invalid),
-            1 => Ok(Self::Command),
-            2 => Ok(Self::Data),
-            _ => Err(()),
-        }
-    }
-}
-
-impl Into<u8> for ObjectType {
-    fn into(self) -> u8 {
-        match self {
-            Self::Invalid => 0x00,
-            Self::Command => 0x01,
-            Self::Data => 0x02,
-        }
-    }
-}
-
-pub enum DfuRequest<'m> {
-    ProtocolVersion,
-    Create { obj_type: ObjectType, obj_size: u32 },
-    SetReceiptNotification { target: u16 },
-    Crc,
-    Execute,
-    Select { obj_type: ObjectType },
-    MtuGet,
-    Write { data: &'m [u8] },
-    Ping { id: u8 },
-    HwVersion,
-    FwVersion { image_id: u8 },
-    Abort,
-}
-
-struct ReadBuf<'m> {
-    data: &'m [u8],
-    pos: usize,
-}
-
-impl<'m> ReadBuf<'m> {
-    fn new(data: &'m [u8]) -> ReadBuf<'m> {
-        Self { data, pos: 0 }
-    }
-
-    fn decode_u8(&mut self) -> Result<u8, ()> {
-        if self.data.len() - self.pos >= 1 {
-            let b = self.data[self.pos];
-            self.pos += 1;
-            Ok(b)
-        } else {
-            Err(())
-        }
-    }
-
-    fn decode_u16(&mut self) -> Result<u16, ()> {
-        if self.data.len() - self.pos >= 2 {
-            let b = u16::from_le_bytes([self.data[self.pos], self.data[self.pos + 1]]);
-            self.pos += 2;
-            Ok(b)
-        } else {
-            Err(())
-        }
-    }
-
-    fn decode_u32(&mut self) -> Result<u32, ()> {
-        if self.data.len() - self.pos >= 4 {
-            let b = u32::from_le_bytes([
-                self.data[self.pos],
-                self.data[self.pos + 1],
-                self.data[self.pos + 2],
-                self.data[self.pos + 3],
-            ]);
-            self.pos += 4;
-            Ok(b)
-        } else {
-            Err(())
-        }
-    }
-
-    fn slice(&mut self) -> &'m [u8] {
-        let s = &self.data[self.pos..];
-        self.pos += s.len();
-        s
-    }
-
-    fn release(self) -> &'m [u8] {
-        &self.data[self.pos..]
-    }
-}
-
-struct WriteBuf<'m> {
-    data: &'m mut [u8],
-    pos: usize,
-}
-
-impl<'m> WriteBuf<'m> {
-    fn new(data: &'m mut [u8]) -> WriteBuf<'m> {
-        Self { data, pos: 0 }
-    }
-
-    fn encode_u8(&mut self, value: u8) -> Result<(), ()> {
-        if self.data.len() - self.pos >= 1 {
-            self.data[self.pos] = value;
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-
-    fn encode_u16(&mut self, value: u16) -> Result<(), ()> {
-        if self.data.len() - self.pos >= 2 {
-            let d = value.to_le_bytes();
-            self.data[self.pos] = d[0];
-            self.data[self.pos + 1] = d[1];
-            self.pos += 2;
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-
-    fn encode_u32(&mut self, value: u32) -> Result<(), ()> {
-        if self.data.len() - self.pos >= 4 {
-            let d = value.to_le_bytes();
-            self.data[self.pos] = d[0];
-            self.data[self.pos + 1] = d[1];
-            self.data[self.pos + 2] = d[2];
-            self.data[self.pos + 3] = d[3];
-            self.pos += 4;
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-
-    fn release(self) -> usize {
-        self.pos
-    }
-}
-
-impl<'m> DfuRequest<'m> {
-    fn decode(data: &'m [u8]) -> Result<(DfuRequest<'m>, &'m [u8]), ()> {
-        let mut data = ReadBuf::new(data);
-        let op = data.decode_u8()?;
-        let req = match op {
-            0x00 => Ok(Self::ProtocolVersion),
-            0x01 => {
-                let obj_type = ObjectType::try_from(data.decode_u8()?)?;
-                let obj_size = data.decode_u32()?;
-
-                Ok(Self::Create { obj_type, obj_size })
-            }
-            0x02 => {
-                let target = data.decode_u16()?;
-                Ok(Self::SetReceiptNotification { target })
-            }
-            0x03 => Ok(Self::Crc),
-            0x04 => Ok(Self::Execute),
-            0x06 => {
-                let obj_type = ObjectType::try_from(data.decode_u8()?)?;
-                Ok(Self::Select { obj_type })
-            }
-            0x07 => Ok(Self::MtuGet),
-            0x08 => Ok(Self::Write { data: data.slice() }),
-            0x09 => {
-                let id = data.decode_u8()?;
-                Ok(Self::Ping { id })
-            }
-            0x0A => Ok(Self::HwVersion),
-            0x0B => {
-                let image_id = data.decode_u8()?;
-                Ok(Self::FwVersion { image_id })
-            }
-            0x0C => Ok(Self::Abort),
-            _ => Err(()),
-        }?;
-
-        Ok((req, data.release()))
-    }
-}
-
-pub enum DfuResponse {
-    ProtocolVersion {
-        version: u8,
-    },
-    Crc {
-        offset: u32,
-        crc: u32,
-    },
-    Select {
-        offset: u32,
-        crc: u32,
-        max_size: u32,
-    },
-    Mtu {
-        mtu: u16,
-    },
-    Write {
-        crc: u32,
-    },
-    Ping {
-        id: u8,
-    },
-    HwVersion {
-        part: u32,
-        variant: u32,
-        rom_size: u32,
-        ram_size: u32,
-        rom_page_size: u32,
-    },
-    FwVersion {
-        ftype: FirmwareType,
-        version: u32,
-        addr: u32,
-        len: u32,
-    },
-}
-
-impl DfuResponse {
-    fn encode(&self, buf: &mut [u8]) -> Result<usize, ()> {
-        let mut buf = WriteBuf::new(buf);
-        match &self {
-            DfuResponse::ProtocolVersion { version } => buf.encode_u8(*version)?,
-            DfuResponse::Crc { offset, crc } => {
-                buf.encode_u32(*offset)?;
-                buf.encode_u32(*crc)?;
-            }
-            DfuResponse::Select { offset, crc, max_size } => {
-                buf.encode_u32(*offset)?;
-                buf.encode_u32(*crc)?;
-                buf.encode_u32(*max_size)?;
-            }
-            DfuResponse::Mtu { mtu } => {
-                buf.encode_u16(*mtu)?;
-            }
-            DfuResponse::Write { crc } => {
-                buf.encode_u32(*crc)?;
-            }
-            DfuResponse::Ping { id } => {
-                buf.encode_u8(*id)?;
-            }
-            DfuResponse::HwVersion {
-                part,
-                variant,
-                rom_size,
-                ram_size,
-                rom_page_size,
-            } => {
-                buf.encode_u32(*part)?;
-                buf.encode_u32(*variant)?;
-                buf.encode_u32(*rom_size)?;
-                buf.encode_u32(*ram_size)?;
-                buf.encode_u32(*rom_page_size)?;
-            }
-            DfuResponse::FwVersion {
-                ftype,
-                version,
-                addr,
-                len,
-            } => {
-                buf.encode_u8((*ftype).into())?;
-                buf.encode_u32(*version)?;
-                buf.encode_u32(*addr)?;
-                buf.encode_u32(*len)?;
-            }
-        }
-        Ok(buf.release())
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum FirmwareType {
-    Softdevice,
-    Application,
-    Bootloader,
-    Unknown,
-}
-
-impl Into<u8> for FirmwareType {
-    fn into(self) -> u8 {
-        match self {
-            Self::Softdevice => 0x00,
-            Self::Application => 0x01,
-            Self::Bootloader => 0x02,
-            Self::Unknown => 0xFF,
-        }
-    }
-}
-
 enum DfuState {
     WaitForData,
     ReceiveFirmware,
     Validate,
-}
-
-pub struct DfuTarget {
-    crc_receipt_interval: u16,
-    receipt_count: usize,
-    objects: [Object; 2],
-    current: usize,
-}
-
-pub struct Object {
-    obj_type: ObjectType,
-    offset: u32,
-    crc: u32,
-    size: u32,
-}
-
-const DFU_MTU: u16 = 32;
-
-impl DfuTarget {
-    pub fn new() -> Self {
-        Self {
-            crc_receipt_interval: 0,
-            receipt_count: 0,
-            objects: [
-                Object {
-                    obj_type: ObjectType::Command,
-                    offset: 0,
-                    crc: 0,
-                    size: 0,
-                },
-                Object {
-                    obj_type: ObjectType::Data,
-                    offset: 0,
-                    crc: 0,
-                    size: 0,
-                },
-            ],
-            current: 0,
-        }
-    }
-
-    fn process<'m>(&mut self, request: DfuRequest<'m>) -> Result<Option<DfuResponse>, ()> {
-        match request {
-            DfuRequest::ProtocolVersion => Ok(Some(DfuResponse::ProtocolVersion {
-                version: NRF_DFU_PROTOCOL_VERSION,
-            })),
-            DfuRequest::Create { obj_type, obj_size } => {
-                let idx = match obj_type {
-                    ObjectType::Command => Some(0),
-
-                    ObjectType::Data => Some(1),
-                    _ => None,
-                };
-                if let Some(idx) = idx {
-                    self.objects[idx] = Object {
-                        obj_type,
-                        size: obj_size,
-                        offset: 0,
-                        crc: 0,
-                    };
-                    self.current = idx;
-                }
-                Ok(None)
-            }
-            DfuRequest::SetReceiptNotification { target } => {
-                self.crc_receipt_interval = target;
-                Ok(None)
-            }
-            DfuRequest::Crc => Ok(Some(DfuResponse::Crc {
-                offset: self.objects[self.current].offset,
-                crc: self.objects[self.current].crc,
-            })),
-            DfuRequest::Execute => {
-                // TODO: If transfer complete, validate and swap
-                Ok(None)
-            }
-            DfuRequest::Select { obj_type } => {
-                let idx = match obj_type {
-                    ObjectType::Command => Some(0),
-
-                    ObjectType::Data => Some(1),
-                    _ => None,
-                };
-                if let Some(idx) = idx {
-                    Ok(Some(DfuResponse::Select {
-                        offset: self.objects[idx].offset,
-                        crc: self.objects[idx].crc,
-                        max_size: self.objects[idx].size,
-                    }))
-                } else {
-                    Ok(None)
-                }
-            }
-
-            DfuRequest::MtuGet => Ok(Some(DfuResponse::Mtu { mtu: DFU_MTU })),
-            DfuRequest::Write { data } => {
-                self.receipt_count += 1;
-                if self.crc_receipt_interval > 0 {
-                    let obj = &self.objects[self.current];
-                    self.receipt_count = 0;
-                    Ok(Some(DfuResponse::Crc {
-                        offset: obj.offset,
-                        crc: obj.crc,
-                    }))
-                } else {
-                    Ok(None)
-                }
-            }
-            DfuRequest::Ping { id } => Ok(Some(DfuResponse::Ping { id })),
-            DfuRequest::HwVersion => {
-                let p = unsafe { pac::Peripherals::steal() };
-                let part = p.FICR.info.part.read().part().bits();
-                let variant = p.FICR.info.variant.read().variant().bits();
-                let rom_size = 12345;
-                let ram_size = 5678;
-                let rom_page_size = 4096;
-                Ok(Some(DfuResponse::HwVersion {
-                    part,
-                    variant,
-                    rom_size,
-                    ram_size,
-                    rom_page_size,
-                }))
-            }
-            DfuRequest::FwVersion { image_id } => {
-                let ftype = FirmwareType::Application;
-                let version = 0;
-                let addr = 0;
-                let len = 1024;
-                Ok(Some(DfuResponse::FwVersion {
-                    ftype,
-                    version,
-                    addr,
-                    len,
-                }))
-            }
-            DfuRequest::Abort => {
-                self.objects[0].crc = 0;
-                self.objects[0].offset = 0;
-                self.objects[1].crc = 0;
-                self.objects[1].offset = 0;
-                self.receipt_count = 0;
-                Ok(None)
-            }
-        }
-    }
 }
 
 impl NrfDfuService {
@@ -522,13 +79,15 @@ impl NrfDfuService {
         request: DfuRequest,
         notify: F,
     ) {
+        info!("Got request {:?}", request);
         match target.process(request) {
-            Ok(Some(response)) => {
-                let mut buf: [u8; 32] = [0; 32];
+            Ok(response) => {
+                info!("Response: {:?}", response);
+                let mut buf: [u8; 512] = [0; 512];
                 match response.encode(&mut buf[..]) {
                     Ok(len) => match notify(&conn, &buf[..len]) {
                         Ok(_) => {
-                            info!("Notification sent successfully");
+                            info!("Notification of len {} sent successfully", len);
                         }
                         Err(e) => {
                             warn!("Error sending notification: {:?}", e);
@@ -539,9 +98,6 @@ impl NrfDfuService {
                     }
                 }
             }
-            Ok(None) => {
-                info!("No response for request");
-            }
             Err(_) => {
                 warn!("Error processing DFU requst");
             }
@@ -549,22 +105,29 @@ impl NrfDfuService {
     }
 
     fn handle(&self, target: &mut DfuTarget, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
+        info!("Got event!");
         match event {
             NrfDfuServiceEvent::ControlWrite(data) => {
+                info!("Control write event");
                 if let Ok((request, _)) = DfuRequest::decode(&data) {
                     self.process(target, connection, request, |conn, response| {
                         if conn.notify_control {
+                            info!("Sending response of {} bytes", response.len());
                             self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())
                         } else {
                             Ok(())
                         }
                     });
+                } else {
+                    panic!("UH");
                 }
             }
             NrfDfuServiceEvent::ControlCccdWrite { notifications } => {
+                info!("Control CCCD write");
                 connection.notify_control = notifications;
             }
             NrfDfuServiceEvent::PacketWrite(data) => {
+                info!("Packet write");
                 let request = DfuRequest::Write { data: &data[..] };
                 self.process(target, connection, request, |conn, response| {
                     if conn.notify_packet {
@@ -575,6 +138,7 @@ impl NrfDfuService {
                 });
             }
             NrfDfuServiceEvent::PacketCccdWrite { notifications } => {
+                info!("Packet CCCD write");
                 connection.notify_packet = notifications;
             }
         }
@@ -756,6 +320,7 @@ pub async fn gatt_server_task(
     loop {
         let target = target.lock().await;
         let mut target = target.borrow_mut();
+        info!("Running GATT server");
         let _ = gatt_server::run(&conn, server, |e| server.handle(&mut target, &mut dfu_conn, e)).await;
         info!("Disconnected");
     }
