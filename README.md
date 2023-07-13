@@ -5,7 +5,7 @@ Firmware for Pinetime based on [Embassy](https://embassy.dev).
 
 TODO:
 
-* Implement Nordic DFU protocol
+* Implement Nordic DFU protocol (version supported by Gadgetbridge and SDK 15.x)
 * Support updating using MCUBoot or embassy-boot
 * Support swapping to Inifinitime + MCUBoot
 * Support installing from Infinitime 'factory firmware'

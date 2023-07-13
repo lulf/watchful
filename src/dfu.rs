@@ -5,6 +5,8 @@ use crate::crc::crc32;
 
 const DFU_PROTOCOL_VERSION: u8 = 0x01;
 const DFU_MTU: u16 = 32;
+const OBJ_TYPE_COMMAND_IDX: usize = 0;
+const OBJ_TYPE_DATA_IDX: usize = 1;
 
 pub struct DfuTarget {
     crc_receipt_interval: u16,
@@ -134,15 +136,15 @@ impl DfuTarget {
     }
 
     pub fn process<'m>(&mut self, request: DfuRequest<'m>) -> Result<DfuResponse<'m>, ()> {
+        info!("DFU REQUEST: {:?}", request);
         let body = match request {
             DfuRequest::ProtocolVersion => Ok(Some(DfuResponseBody::ProtocolVersion {
                 version: DFU_PROTOCOL_VERSION,
             })),
             DfuRequest::Create { obj_type, obj_size } => {
                 let idx = match obj_type {
-                    ObjectType::Command => Some(0),
-
-                    ObjectType::Data => Some(1),
+                    ObjectType::Command => Some(OBJ_TYPE_COMMAND_IDX),
+                    ObjectType::Data => Some(OBJ_TYPE_DATA_IDX),
                     _ => None,
                 };
                 if let Some(idx) = idx {
@@ -154,6 +156,7 @@ impl DfuTarget {
                     };
                     self.current = idx;
                 }
+                self.receipt_count = 0;
                 Ok(None)
             }
             DfuRequest::SetReceiptNotification { target } => {
@@ -170,9 +173,8 @@ impl DfuTarget {
             }
             DfuRequest::Select { obj_type } => {
                 let idx = match obj_type {
-                    ObjectType::Command => Some(0),
-
-                    ObjectType::Data => Some(1),
+                    ObjectType::Command => Some(OBJ_TYPE_COMMAND_IDX),
+                    ObjectType::Data => Some(OBJ_TYPE_DATA_IDX),
                     _ => None,
                 };
                 if let Some(idx) = idx {
@@ -188,11 +190,9 @@ impl DfuTarget {
 
             DfuRequest::MtuGet => Ok(Some(DfuResponseBody::Mtu { mtu: DFU_MTU })),
             DfuRequest::Write { data } => {
-                info!("WRITE WRITE WRITE");
                 let obj = &mut self.objects[self.current];
                 obj.crc = obj.crc ^ crc32(data);
                 obj.offset += data.len() as u32;
-                info!("CRC updated to 0x{:x}", obj.crc);
 
                 if self.crc_receipt_interval > 0 {
                     self.receipt_count += 1;
@@ -205,7 +205,10 @@ impl DfuTarget {
                         Ok(None)
                     }
                 } else {
-                    Ok(None)
+                    Ok(Some(DfuResponseBody::Crc {
+                        offset: obj.offset,
+                        crc: obj.crc,
+                    }))
                 }
             }
             DfuRequest::Ping { id } => Ok(Some(DfuResponseBody::Ping { id })),
@@ -245,6 +248,8 @@ impl DfuTarget {
                 Ok(None)
             }
         }?;
+
+        info!("DFU RESPONSE: {:?}", body);
         Ok(DfuResponse {
             request,
             result: DfuResult::Success,
@@ -323,11 +328,9 @@ impl<'m> DfuResponse<'m> {
 
         let len = self.result.encode(buf.slice())?;
         buf.advance(len)?;
-        info!("Got {} bytes encoded so far", buf.len());
 
         if let Some(body) = self.body {
             let len = body.encode(buf.slice())?;
-            info!("Encoded body of {} bytes", len);
             buf.advance(len)?;
         }
         Ok(buf.release())
@@ -365,14 +368,13 @@ impl DfuResponseBody {
         match &self {
             DfuResponseBody::ProtocolVersion { version } => buf.encode_u8(*version)?,
             DfuResponseBody::Crc { offset, crc } => {
-                info!("Encode offset {}, crc {}", *offset, *crc);
                 buf.encode_u32(*offset)?;
                 buf.encode_u32(*crc)?;
             }
             DfuResponseBody::Select { offset, crc, max_size } => {
+                buf.encode_u32(*max_size)?;
                 buf.encode_u32(*offset)?;
                 buf.encode_u32(*crc)?;
-                buf.encode_u32(*max_size)?;
             }
             DfuResponseBody::Mtu { mtu } => {
                 buf.encode_u16(*mtu)?;
@@ -498,6 +500,10 @@ impl<'m> ReadBuf<'m> {
 
     fn release(self) -> &'m [u8] {
         &self.data[self.pos..]
+    }
+
+    fn len(&self) -> usize {
+        self.data.len() - self.pos
     }
 }
 

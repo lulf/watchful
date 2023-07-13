@@ -55,7 +55,7 @@ pub struct NrfDfuService {
     /// The maximum size of each packet is derived from the Att MTU size of the connection.
     /// The maximum Att MTU size of the DFU Service is 256 bytes (saved in NRF_SDH_BLE_GATT_MAX_MTU_SIZE),
     /// making the maximum size of the DFU Packet characteristic 253 bytes. (3 bytes are used for opcode and handle ID upon writing.)
-    #[characteristic(uuid = "8EC90002-F315-4F60-9FB8-838830DAEA50", write, notify)]
+    #[characteristic(uuid = "8EC90002-F315-4F60-9FB8-838830DAEA50", write_without_response, notify)]
     packet: Vec<u8, ATT_MTU>,
 }
 
@@ -79,16 +79,12 @@ impl NrfDfuService {
         request: DfuRequest,
         notify: F,
     ) {
-        info!("Got request {:?}", request);
         match target.process(request) {
             Ok(response) => {
-                info!("Response: {:?}", response);
                 let mut buf: [u8; 512] = [0; 512];
                 match response.encode(&mut buf[..]) {
                     Ok(len) => match notify(&conn, &buf[..len]) {
-                        Ok(_) => {
-                            info!("Notification of len {} sent successfully", len);
-                        }
+                        Ok(_) => {}
                         Err(e) => {
                             warn!("Error sending notification: {:?}", e);
                         }
@@ -105,40 +101,40 @@ impl NrfDfuService {
     }
 
     fn handle(&self, target: &mut DfuTarget, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
-        info!("Got event!");
         match event {
             NrfDfuServiceEvent::ControlWrite(data) => {
-                info!("Control write event");
+                info!("CONTROL");
                 if let Ok((request, _)) = DfuRequest::decode(&data) {
                     self.process(target, connection, request, |conn, response| {
                         if conn.notify_control {
-                            info!("Sending response of {} bytes", response.len());
-                            self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())
-                        } else {
-                            Ok(())
+                            self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                         }
+                        if conn.notify_packet {
+                            self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
+                        }
+                        Ok(())
                     });
-                } else {
-                    panic!("UH");
                 }
             }
             NrfDfuServiceEvent::ControlCccdWrite { notifications } => {
-                info!("Control CCCD write");
+                info!("CONTROL notifications ENABLED");
                 connection.notify_control = notifications;
             }
             NrfDfuServiceEvent::PacketWrite(data) => {
-                info!("Packet write");
+                info!("DATA");
                 let request = DfuRequest::Write { data: &data[..] };
                 self.process(target, connection, request, |conn, response| {
-                    if conn.notify_packet {
-                        self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())
-                    } else {
-                        Ok(())
+                    if conn.notify_control {
+                        self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                     }
+                    if conn.notify_packet {
+                        self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
+                    }
+                    Ok(())
                 });
             }
             NrfDfuServiceEvent::PacketCccdWrite { notifications } => {
-                info!("Packet CCCD write");
+                info!("DATA notifications ENABLED");
                 connection.notify_packet = notifications;
             }
         }
