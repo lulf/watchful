@@ -16,6 +16,8 @@ pub struct DfuTarget {
     receipt_count: u16,
     objects: [Object; 2],
     current: usize,
+    fw_info: FirmwareInfo,
+    hw_info: HardwareInfo,
 }
 
 pub struct Object {
@@ -23,6 +25,21 @@ pub struct Object {
     offset: u32,
     crc: Crc32,
     size: u32,
+}
+
+pub struct FirmwareInfo {
+    pub ftype: FirmwareType,
+    pub version: u32,
+    pub addr: u32,
+    pub len: u32,
+}
+
+pub struct HardwareInfo {
+    pub part: u32,
+    pub variant: u32,
+    pub rom_size: u32,
+    pub ram_size: u32,
+    pub rom_page_size: u32,
 }
 
 #[derive(Debug)]
@@ -144,11 +161,11 @@ where
 }
 
 impl<FLASH: NorFlash> DfuController<FLASH> {
-    pub fn new(flash: FLASH) -> DfuController<FLASH> {
+    pub fn new(flash: FLASH, fw_info: FirmwareInfo, hw_info: HardwareInfo) -> DfuController<FLASH> {
         let size = flash.capacity();
         Self {
             flash,
-            target: DfuTarget::new(size as u32),
+            target: DfuTarget::new(size as u32, fw_info, hw_info),
         }
     }
 
@@ -158,7 +175,7 @@ impl<FLASH: NorFlash> DfuController<FLASH> {
 }
 
 impl DfuTarget {
-    pub fn new(size: u32) -> Self {
+    pub fn new(size: u32, fw_info: FirmwareInfo, hw_info: HardwareInfo) -> Self {
         Self {
             crc_receipt_interval: 0,
             receipt_count: 0,
@@ -177,6 +194,8 @@ impl DfuTarget {
                 },
             ],
             current: 0,
+            fw_info,
+            hw_info,
         }
     }
 
@@ -271,35 +290,19 @@ impl DfuTarget {
                 }
             }
             DfuRequest::Ping { id } => Some(DfuResponseBody::Ping { id }),
-            DfuRequest::HwVersion => {
-                /*
-                let p = unsafe { pac::Peripherals::steal() };
-                let part = p.FICR.info.part.read().part().bits();
-                let variant = p.FICR.info.variant.read().variant().bits();
-                let rom_size = 12345;
-                let ram_size = 5678;
-                let rom_page_size = 4096;
-                Some(DfuResponseBody::HwVersion {
-                    part,
-                    variant,
-                    rom_size,
-                    ram_size,
-                    rom_page_size,
-                })*/
-                None
-            }
-            DfuRequest::FwVersion { image_id } => {
-                let ftype = FirmwareType::Application;
-                let version = 0;
-                let addr = 0;
-                let len = 1024;
-                Some(DfuResponseBody::FwVersion {
-                    ftype,
-                    version,
-                    addr,
-                    len,
-                })
-            }
+            DfuRequest::HwVersion => Some(DfuResponseBody::HwVersion {
+                part: self.hw_info.part,
+                variant: self.hw_info.variant,
+                rom_size: self.hw_info.rom_size,
+                ram_size: self.hw_info.ram_size,
+                rom_page_size: self.hw_info.rom_page_size,
+            }),
+            DfuRequest::FwVersion { image_id } => Some(DfuResponseBody::FwVersion {
+                ftype: self.fw_info.ftype,
+                version: self.fw_info.version,
+                addr: self.fw_info.addr,
+                len: self.fw_info.len,
+            }),
             DfuRequest::Abort => {
                 self.objects[0].crc.reset();
                 self.objects[0].offset = 0;

@@ -5,9 +5,9 @@
 use core::cell::RefCell;
 
 use defmt::{info, warn, Format};
-use dfu::*;
 use display_interface_spi::SPIInterfaceNoCS;
 use embassy_executor::Spawner;
+use embassy_futures::block_on;
 use embassy_futures::select::{select, Either};
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::interrupt::Priority;
@@ -16,6 +16,7 @@ use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, pac, peripherals, spim};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::image::{Image, ImageRawLE};
@@ -30,16 +31,14 @@ use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
 use embedded_text::TextBox;
 use heapless::Vec;
 use mipidsi::models::ST7789;
+use nrf_dfu::prelude::*;
 use nrf_softdevice::ble::gatt_server::NotifyValueError;
 use nrf_softdevice::ble::{gatt_server, peripheral, Connection, DisconnectedError};
-use nrf_softdevice::{gatt_server, raw, Softdevice};
+use nrf_softdevice::{gatt_server, raw, Flash, Softdevice};
 use static_cell::StaticCell;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
 use {defmt_rtt as _, panic_probe as _};
-
-mod crc;
-mod dfu;
 
 bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
@@ -74,12 +73,12 @@ enum DfuState {
 impl NrfDfuService {
     fn process<F: FnOnce(&DfuConnection, &[u8]) -> Result<(), NotifyValueError>>(
         &self,
-        target: &mut DfuTarget,
+        controller: &mut DfuController<Flash>,
         conn: &mut DfuConnection,
         request: DfuRequest,
         notify: F,
     ) {
-        match target.process(request) {
+        match block_on(controller.process(request)) {
             Ok(response) => {
                 let mut buf: [u8; 512] = [0; 512];
                 match response.encode(&mut buf[..]) {
@@ -100,11 +99,11 @@ impl NrfDfuService {
         }
     }
 
-    fn handle(&self, target: &mut DfuTarget, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
+    fn handle(&self, controller: &mut DfuController<Flash>, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
         match event {
             NrfDfuServiceEvent::ControlWrite(data) => {
                 if let Ok((request, _)) = DfuRequest::decode(&data) {
-                    self.process(target, connection, request, |conn, response| {
+                    self.process(controller, connection, request, |conn, response| {
                         if conn.notify_control {
                             self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                         }
@@ -117,7 +116,7 @@ impl NrfDfuService {
             }
             NrfDfuServiceEvent::PacketWrite(data) => {
                 let request = DfuRequest::Write { data: &data[..] };
-                self.process(target, connection, request, |conn, response| {
+                self.process(controller, connection, request, |conn, response| {
                     if conn.notify_packet {
                         self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                     }
@@ -137,31 +136,51 @@ pub struct PineTimeServer {
 }
 
 impl PineTimeServer {
-    fn handle(&self, target: &mut DfuTarget, conn: &mut DfuConnection, event: PineTimeServerEvent) {
+    fn handle(&self, controller: &mut DfuController<Flash>, conn: &mut DfuConnection, event: PineTimeServerEvent) {
         match event {
-            PineTimeServerEvent::Dfu(event) => self.dfu.handle(target, conn, event),
+            PineTimeServerEvent::Dfu(event) => self.dfu.handle(controller, conn, event),
         }
     }
 }
 
 #[embassy_executor::main]
 async fn main(s: Spawner) {
+    let p = unsafe { pac::Peripherals::steal() };
+    let part = p.FICR.info.part.read().part().bits();
+    let variant = p.FICR.info.variant.read().variant().bits();
+
+    let hw_info = HardwareInfo {
+        part,
+        variant,
+        rom_size: 0,
+        ram_size: 0,
+        rom_page_size: 0,
+    };
+
+    let fw_info = FirmwareInfo {
+        ftype: FirmwareType::Application,
+        version: 1,
+        addr: 0,
+        len: 0,
+    };
+
     let mut config = embassy_nrf::config::Config::default();
     config.gpiote_interrupt_priority = Priority::P2;
     config.time_interrupt_priority = Priority::P2;
     let p = embassy_nrf::init(config);
 
     let sd = enable_softdevice("Pinetime Embassy");
+    let flash = Flash::take(sd);
 
     static GATT: StaticCell<PineTimeServer> = StaticCell::new();
     let server = GATT.init(PineTimeServer::new(sd).unwrap());
 
     s.spawn(softdevice_task(sd)).unwrap();
 
-    static TARGET: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<DfuTarget>>> = StaticCell::new();
-    let target = TARGET.init(Mutex::new(RefCell::new(DfuTarget::new())));
+    static CONTROLLER: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<DfuController<Flash>>>> = StaticCell::new();
+    let controller = CONTROLLER.init(Mutex::new(RefCell::new(DfuController::new(flash, fw_info, hw_info))));
 
-    s.spawn(advertiser_task(s, sd, server, target, "Pinetime Embassy"))
+    s.spawn(advertiser_task(s, sd, server, controller, "Pinetime Embassy"))
         .unwrap();
 
     info!("Hello world");
@@ -295,7 +314,7 @@ pub async fn gatt_server_task(
     sd: &'static Softdevice,
     conn: Connection,
     server: &'static PineTimeServer,
-    target: &'static Mutex<CriticalSectionRawMutex, RefCell<DfuTarget>>,
+    controller: &'static Mutex<CriticalSectionRawMutex, RefCell<DfuController<Flash>>>,
 ) {
     let mut dfu_conn = DfuConnection {
         connection: conn.clone(),
@@ -303,23 +322,19 @@ pub async fn gatt_server_task(
         notify_packet: false,
     };
 
-    loop {
-        let target = target.lock().await;
-        let mut target = target.borrow_mut();
-        info!("Running GATT server");
-        let _ = gatt_server::run(&conn, server, |e| server.handle(&mut target, &mut dfu_conn, e)).await;
-        info!("Disconnected");
-    }
+    let controller = controller.lock().await;
+    let mut controller = controller.borrow_mut();
+    info!("Running GATT server");
+    let _ = gatt_server::run(&conn, server, |e| server.handle(&mut controller, &mut dfu_conn, e)).await;
+    info!("Disconnected");
 }
-
-use embassy_sync::mutex::Mutex;
 
 #[embassy_executor::task]
 pub async fn advertiser_task(
     spawner: Spawner,
     sd: &'static Softdevice,
     server: &'static PineTimeServer,
-    target: &'static Mutex<CriticalSectionRawMutex, RefCell<DfuTarget>>,
+    controller: &'static Mutex<CriticalSectionRawMutex, RefCell<DfuController<Flash>>>,
     name: &'static str,
 ) {
     let mut adv_data: Vec<u8, 31> = Vec::new();
@@ -346,7 +361,7 @@ pub async fn advertiser_task(
         let conn = peripheral::advertise_connectable(sd, adv, &config).await.unwrap();
 
         info!("connection established");
-        if let Err(e) = spawner.spawn(gatt_server_task(sd, conn, server, target)) {
+        if let Err(e) = spawner.spawn(gatt_server_task(sd, conn, server, controller)) {
             defmt::info!("Error spawning gatt task: {:?}", e);
         }
     }
