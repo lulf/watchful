@@ -1,7 +1,11 @@
 use defmt::{info, Format};
 use embassy_nrf::pac;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
+use embedded_hal_02::blocking::delay::DelayMs;
+use nrf_softdevice::ble::Connection;
 
-use crate::crc::crc32;
+use crate::crc::*;
 
 const DFU_PROTOCOL_VERSION: u8 = 0x01;
 const DFU_MTU: u16 = 32;
@@ -112,6 +116,22 @@ pub enum FirmwareType {
     Unknown,
 }
 
+/*
+pub struct DfuController<'a> {
+    channel: Channel<CriticalSectionRawMutex, DfuEvent, 10>,
+}
+
+pub enum DfuEvent<'a> {
+    EnableNotification(Connection),
+    Request(DfuRequest<'a>),
+}
+
+impl<'a> DfuController<'a> {
+    pub async fn run(&'a self) -> ! {
+        loop {}
+    }
+}*/
+
 impl DfuTarget {
     pub fn new() -> Self {
         Self {
@@ -121,14 +141,14 @@ impl DfuTarget {
                 Object {
                     obj_type: ObjectType::Command,
                     offset: 0,
-                    crc: 0,
+                    crc: crc32_init(),
                     size: 512,
                 },
                 Object {
                     obj_type: ObjectType::Data,
                     offset: 0,
-                    crc: 0,
-                    size: 0,
+                    crc: crc32_init(),
+                    size: 262144,
                 },
             ],
             current: 0,
@@ -152,7 +172,7 @@ impl DfuTarget {
                         obj_type,
                         size: obj_size,
                         offset: 0,
-                        crc: 0,
+                        crc: crc32_init(),
                     };
                     self.current = idx;
                 }
@@ -165,10 +185,14 @@ impl DfuTarget {
             }
             DfuRequest::Crc => Ok(Some(DfuResponseBody::Crc {
                 offset: self.objects[self.current].offset,
-                crc: self.objects[self.current].crc,
+                crc: crc32_finish(self.objects[self.current].crc),
             })),
             DfuRequest::Execute => {
+                // TODO: If init packet, validate content
                 // TODO: If transfer complete, validate and swap
+                if self.current == OBJ_TYPE_DATA_IDX {
+                    cortex_m::peripheral::SCB::sys_reset();
+                }
                 Ok(None)
             }
             DfuRequest::Select { obj_type } => {
@@ -180,7 +204,7 @@ impl DfuTarget {
                 if let Some(idx) = idx {
                     Ok(Some(DfuResponseBody::Select {
                         offset: self.objects[idx].offset,
-                        crc: self.objects[idx].crc,
+                        crc: crc32_finish(self.objects[idx].crc),
                         max_size: self.objects[idx].size,
                     }))
                 } else {
@@ -191,15 +215,16 @@ impl DfuTarget {
             DfuRequest::MtuGet => Ok(Some(DfuResponseBody::Mtu { mtu: DFU_MTU })),
             DfuRequest::Write { data } => {
                 let obj = &mut self.objects[self.current];
-                obj.crc = obj.crc ^ crc32(data);
+                obj.crc = crc32_ext(obj.crc, data);
                 obj.offset += data.len() as u32;
 
                 if self.crc_receipt_interval > 0 {
                     self.receipt_count += 1;
                     if self.receipt_count == self.crc_receipt_interval {
+                        self.receipt_count = 0;
                         Ok(Some(DfuResponseBody::Crc {
                             offset: obj.offset,
-                            crc: obj.crc,
+                            crc: crc32_finish(obj.crc),
                         }))
                     } else {
                         Ok(None)
@@ -207,7 +232,7 @@ impl DfuTarget {
                 } else {
                     Ok(Some(DfuResponseBody::Crc {
                         offset: obj.offset,
-                        crc: obj.crc,
+                        crc: crc32_finish(obj.crc),
                     }))
                 }
             }
@@ -240,15 +265,14 @@ impl DfuTarget {
                 }))
             }
             DfuRequest::Abort => {
-                self.objects[0].crc = 0;
+                self.objects[0].crc = crc32_init();
                 self.objects[0].offset = 0;
-                self.objects[1].crc = 0;
+                self.objects[1].crc = crc32_init();
                 self.objects[1].offset = 0;
                 self.receipt_count = 0;
                 Ok(None)
             }
         }?;
-
         info!("DFU RESPONSE: {:?}", body);
         Ok(DfuResponse {
             request,

@@ -41,6 +41,22 @@ pub fn crc32(data: &[u8]) -> u32 {
     crc ^ 0xFFFFFFFF
 }
 
+pub fn crc32_init() -> u32 {
+    0xFFFFFFFF
+}
+
+pub fn crc32_ext(mut crc: u32, data: &[u8]) -> u32 {
+    for b in data {
+        let idx: u32 = (crc ^ *b as u32) & 0xFF;
+        crc = (crc >> 8) ^ CRC_TABLE[idx as usize];
+    }
+    crc
+}
+
+pub fn crc32_finish(crc: u32) -> u32 {
+    crc ^ 0xFFFFFFFF
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

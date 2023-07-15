@@ -45,7 +45,7 @@ bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
 });
 
-const ATT_MTU: usize = 32;
+const ATT_MTU: usize = 128;
 
 #[nrf_softdevice::gatt_service(uuid = "FE59")]
 pub struct NrfDfuService {
@@ -103,30 +103,21 @@ impl NrfDfuService {
     fn handle(&self, target: &mut DfuTarget, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
         match event {
             NrfDfuServiceEvent::ControlWrite(data) => {
-                info!("CONTROL");
                 if let Ok((request, _)) = DfuRequest::decode(&data) {
                     self.process(target, connection, request, |conn, response| {
                         if conn.notify_control {
                             self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
-                        }
-                        if conn.notify_packet {
-                            self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                         }
                         Ok(())
                     });
                 }
             }
             NrfDfuServiceEvent::ControlCccdWrite { notifications } => {
-                info!("CONTROL notifications ENABLED");
                 connection.notify_control = notifications;
             }
             NrfDfuServiceEvent::PacketWrite(data) => {
-                info!("DATA");
                 let request = DfuRequest::Write { data: &data[..] };
                 self.process(target, connection, request, |conn, response| {
-                    if conn.notify_control {
-                        self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
-                    }
                     if conn.notify_packet {
                         self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                     }
@@ -134,7 +125,6 @@ impl NrfDfuService {
                 });
             }
             NrfDfuServiceEvent::PacketCccdWrite { notifications } => {
-                info!("DATA notifications ENABLED");
                 connection.notify_packet = notifications;
             }
         }

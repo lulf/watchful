@@ -350,6 +350,7 @@ dependencies = [
  "critical-section",
  "defmt",
  "embedded-hal 0.2.7",
+ "embedded-hal 1.0.0-alpha.10",
  "futures-util",
  "heapless",
 ]
@@ -848,6 +849,8 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embedded-graphics",
+ "embedded-hal 0.2.7",
+ "embedded-hal 1.0.0-alpha.10",
  "embedded-io",
  "embedded-text",
  "heapless",
