@@ -30,41 +30,27 @@ const CRC_TABLE: [u32; 256] = [
     0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d,
 ];
 
-pub fn crc32(data: &[u8]) -> u32 {
-    let mut crc = 0xFFFFFFFF;
+pub struct Crc32 {
+    crc: u32,
+}
 
-    for b in data {
-        let idx: u32 = (crc ^ *b as u32) & 0xFF;
-        crc = (crc >> 8) ^ CRC_TABLE[idx as usize];
+impl Crc32 {
+    pub fn init() -> Self {
+        Self { crc: 0xFFFFFFFF }
     }
 
-    crc ^ 0xFFFFFFFF
-}
-
-pub fn crc32_init() -> u32 {
-    0xFFFFFFFF
-}
-
-pub fn crc32_ext(mut crc: u32, data: &[u8]) -> u32 {
-    for b in data {
-        let idx: u32 = (crc ^ *b as u32) & 0xFF;
-        crc = (crc >> 8) ^ CRC_TABLE[idx as usize];
+    pub fn reset(&mut self) {
+        self.crc = 0xFFFFFFFF;
     }
-    crc
-}
 
-pub fn crc32_finish(crc: u32) -> u32 {
-    crc ^ 0xFFFFFFFF
-}
+    pub fn add(&mut self, data: &[u8]) {
+        for b in data {
+            let idx: u32 = (self.crc ^ *b as u32) & 0xFF;
+            self.crc = (self.crc >> 8) ^ CRC_TABLE[idx as usize];
+        }
+    }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_crc32() {
-        let input = &[0xa, 0xb, 0xc, 0xd, 0xe, 0xf];
-        let output = crc32(input);
-        assert_eq!(0x2bbbaf20, output);
+    pub fn finish(&self) -> u32 {
+        self.crc ^ 0xFFFFFFFF
     }
 }
