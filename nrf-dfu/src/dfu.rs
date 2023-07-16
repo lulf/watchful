@@ -216,10 +216,13 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
         config: &mut FirmwareUpdaterConfig<DFU, STATE>,
     ) -> Result<DfuResponse<'m>, Error> {
         info!("DFU REQUEST: {:?}", request);
-        let body = match request {
-            DfuRequest::ProtocolVersion => Some(DfuResponseBody::ProtocolVersion {
-                version: DFU_PROTOCOL_VERSION,
-            }),
+        let (result, body) = match request {
+            DfuRequest::ProtocolVersion => (
+                DfuResult::Success,
+                Some(DfuResponseBody::ProtocolVersion {
+                    version: DFU_PROTOCOL_VERSION,
+                }),
+            ),
             DfuRequest::Create { obj_type, obj_size } => {
                 let idx = match obj_type {
                     ObjectType::Command => Some(OBJ_TYPE_COMMAND_IDX),
@@ -241,28 +244,26 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                     }
                 }
                 self.receipt_count = 0;
-                None
+                (DfuResult::Success, None)
             }
             DfuRequest::SetReceiptNotification { target } => {
                 self.crc_receipt_interval = target;
-                None
+                (DfuResult::Success, None)
             }
-            DfuRequest::Crc => Some(DfuResponseBody::Crc {
-                offset: self.objects[self.current].offset,
-                crc: self.objects[self.current].crc.finish(),
-            }),
+            DfuRequest::Crc => (
+                DfuResult::Success,
+                Some(DfuResponseBody::Crc {
+                    offset: self.objects[self.current].offset,
+                    crc: self.objects[self.current].crc.finish(),
+                }),
+            ),
             DfuRequest::Execute => {
                 let obj = &mut self.objects[self.current];
-                match obj.obj_type {
-                    ObjectType::Command => {
-                        // TODO: Validate content
-                    }
-                    ObjectType::Data => {
-                        // TODO: schedule validate and swap
-                    }
-                    ObjectType::Invalid => {}
+                if obj.offset != obj.size {
+                    (DfuResult::OpNotSupported, None)
+                } else {
+                    (DfuResult::Success, None)
                 }
-                None
             }
             DfuRequest::Select { obj_type } => {
                 let idx = match obj_type {
@@ -271,17 +272,20 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                     _ => None,
                 };
                 if let Some(idx) = idx {
-                    Some(DfuResponseBody::Select {
-                        offset: self.objects[idx].offset,
-                        crc: self.objects[idx].crc.finish(),
-                        max_size: self.objects[idx].size,
-                    })
+                    (
+                        DfuResult::Success,
+                        Some(DfuResponseBody::Select {
+                            offset: self.objects[idx].offset,
+                            crc: self.objects[idx].crc.finish(),
+                            max_size: self.objects[idx].size,
+                        }),
+                    )
                 } else {
-                    None
+                    (DfuResult::InvalidObject, None)
                 }
             }
 
-            DfuRequest::MtuGet => Some(DfuResponseBody::Mtu { mtu: DFU_MTU as u16 }),
+            DfuRequest::MtuGet => (DfuResult::Success, Some(DfuResponseBody::Mtu { mtu: DFU_MTU as u16 })),
             DfuRequest::Write { data } => {
                 let obj = &mut self.objects[self.current];
 
@@ -301,7 +305,7 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                 obj.crc.add(data);
                 obj.offset += data.len() as u32;
 
-                if self.crc_receipt_interval > 0 {
+                let body = if self.crc_receipt_interval > 0 {
                     self.receipt_count += 1;
                     if self.receipt_count == self.crc_receipt_interval {
                         self.receipt_count = 0;
@@ -317,37 +321,40 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                         offset: obj.offset,
                         crc: obj.crc.finish(),
                     })
-                }
+                };
+                (DfuResult::Success, body)
             }
-            DfuRequest::Ping { id } => Some(DfuResponseBody::Ping { id }),
-            DfuRequest::HwVersion => Some(DfuResponseBody::HwVersion {
-                part: self.hw_info.part,
-                variant: self.hw_info.variant,
-                rom_size: self.hw_info.rom_size,
-                ram_size: self.hw_info.ram_size,
-                rom_page_size: self.hw_info.rom_page_size,
-            }),
-            DfuRequest::FwVersion { image_id } => Some(DfuResponseBody::FwVersion {
-                ftype: self.fw_info.ftype,
-                version: self.fw_info.version,
-                addr: self.fw_info.addr,
-                len: self.fw_info.len,
-            }),
+            DfuRequest::Ping { id } => (DfuResult::Success, Some(DfuResponseBody::Ping { id })),
+            DfuRequest::HwVersion => (
+                DfuResult::Success,
+                Some(DfuResponseBody::HwVersion {
+                    part: self.hw_info.part,
+                    variant: self.hw_info.variant,
+                    rom_size: self.hw_info.rom_size,
+                    ram_size: self.hw_info.ram_size,
+                    rom_page_size: self.hw_info.rom_page_size,
+                }),
+            ),
+            DfuRequest::FwVersion { image_id } => (
+                DfuResult::Success,
+                Some(DfuResponseBody::FwVersion {
+                    ftype: self.fw_info.ftype,
+                    version: self.fw_info.version,
+                    addr: self.fw_info.addr,
+                    len: self.fw_info.len,
+                }),
+            ),
             DfuRequest::Abort => {
                 self.objects[0].crc.reset();
                 self.objects[0].offset = 0;
                 self.objects[1].crc.reset();
                 self.objects[1].offset = 0;
                 self.receipt_count = 0;
-                None
+                (DfuResult::Success, None)
             }
         };
-        info!("DFU RESPONSE: {:?}", body);
-        Ok(DfuResponse {
-            request,
-            result: DfuResult::Success,
-            body,
-        })
+        info!("DFU RESPONSE: {:?} {:?}", result, body);
+        Ok(DfuResponse { request, result, body })
     }
 }
 
