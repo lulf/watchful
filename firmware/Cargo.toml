@@ -9,7 +9,9 @@ embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "c
 embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
 embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
 embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
 embassy-boot = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
+#embassy-boot = { path = "../../embassy/embassy-boot/boot" }
 embassy-boot-nrf = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
 embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
 

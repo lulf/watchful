@@ -54,3 +54,17 @@ impl Crc32 {
         self.crc ^ 0xFFFFFFFF
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_crc32() {
+        let mut crc = Crc32::init();
+        crc.add(&[0xa, 0xb, 0xc]);
+        crc.add(&[0xd, 0xe, 0xf]);
+        let output = crc.finish();
+        assert_eq!(0x2bbbaf20, output);
+    }
+}

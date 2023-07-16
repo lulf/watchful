@@ -9,7 +9,7 @@ embassy-futures = { version = "0.1.0" }
 embassy-sync = { version = "0.2.0" }
 embassy-nrf = { version = "0.1.0", features = ["nrf52832", "nightly"] } #, "nfc-pins-as-gpio"] }
 embassy-boot = { version = "0.1.0" }
-embassy-boot-nrf = { version = "0.1.0" }
+embassy-boot-nrf = { version = "0.1.0", features = ["softdevice"] }
 embedded-io = "0.4.0"
 embedded-storage-async = "0.4.0"
 embedded-storage = "0.3.0"

@@ -6,6 +6,8 @@ use core::cell::RefCell;
 
 use defmt::{info, warn, Format};
 use display_interface_spi::SPIInterfaceNoCS;
+use embassy_boot_nrf::{FirmwareUpdater, FirmwareUpdaterConfig};
+use embassy_embedded_hal::flash::partition::Partition;
 use embassy_executor::Spawner;
 use embassy_futures::block_on;
 use embassy_futures::select::{select, Either};
@@ -15,7 +17,7 @@ use embassy_nrf::peripherals::{P0_18, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, pac, peripherals, spim};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Delay, Duration, Timer};
@@ -70,10 +72,13 @@ enum DfuState {
     Validate,
 }
 
+type Part = Partition<'static, NoopRawMutex, Flash>;
+type UpdateController = DfuController<Part, Part, ATT_MTU>;
+
 impl NrfDfuService {
     fn process<F: FnOnce(&DfuConnection, &[u8]) -> Result<(), NotifyValueError>>(
         &self,
-        controller: &mut DfuController<Flash>,
+        controller: &mut UpdateController,
         conn: &mut DfuConnection,
         request: DfuRequest,
         notify: F,
@@ -99,7 +104,7 @@ impl NrfDfuService {
         }
     }
 
-    fn handle(&self, controller: &mut DfuController<Flash>, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
+    fn handle(&self, controller: &mut UpdateController, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
         match event {
             NrfDfuServiceEvent::ControlWrite(data) => {
                 if let Ok((request, _)) = DfuRequest::decode(&data) {
@@ -136,7 +141,7 @@ pub struct PineTimeServer {
 }
 
 impl PineTimeServer {
-    fn handle(&self, controller: &mut DfuController<Flash>, conn: &mut DfuConnection, event: PineTimeServerEvent) {
+    fn handle(&self, controller: &mut UpdateController, conn: &mut DfuConnection, event: PineTimeServerEvent) {
         match event {
             PineTimeServerEvent::Dfu(event) => self.dfu.handle(controller, conn, event),
         }
@@ -170,15 +175,19 @@ async fn main(s: Spawner) {
     let p = embassy_nrf::init(config);
 
     let sd = enable_softdevice("Pinetime Embassy");
-    let flash = Flash::take(sd);
+    static FLASH: StaticCell<Mutex<NoopRawMutex, Flash>> = StaticCell::new();
+    let flash = FLASH.init(Mutex::new(Flash::take(sd)));
 
     static GATT: StaticCell<PineTimeServer> = StaticCell::new();
     let server = GATT.init(PineTimeServer::new(sd).unwrap());
 
     s.spawn(softdevice_task(sd)).unwrap();
 
-    static CONTROLLER: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<DfuController<Flash>>>> = StaticCell::new();
-    let controller = CONTROLLER.init(Mutex::new(RefCell::new(DfuController::new(flash, fw_info, hw_info))));
+    static CONTROLLER: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<UpdateController>>> = StaticCell::new();
+    let config = FirmwareUpdaterConfig::from_linkerfile(flash);
+    let controller = CONTROLLER.init(Mutex::new(RefCell::new(UpdateController::new(
+        config, fw_info, hw_info,
+    ))));
 
     s.spawn(advertiser_task(s, sd, server, controller, "Pinetime Embassy"))
         .unwrap();
@@ -314,7 +323,7 @@ pub async fn gatt_server_task(
     sd: &'static Softdevice,
     conn: Connection,
     server: &'static PineTimeServer,
-    controller: &'static Mutex<CriticalSectionRawMutex, RefCell<DfuController<Flash>>>,
+    controller: &'static Mutex<CriticalSectionRawMutex, RefCell<UpdateController>>,
 ) {
     let mut dfu_conn = DfuConnection {
         connection: conn.clone(),
@@ -334,7 +343,7 @@ pub async fn advertiser_task(
     spawner: Spawner,
     sd: &'static Softdevice,
     server: &'static PineTimeServer,
-    controller: &'static Mutex<CriticalSectionRawMutex, RefCell<DfuController<Flash>>>,
+    controller: &'static Mutex<CriticalSectionRawMutex, RefCell<UpdateController>>,
     name: &'static str,
 ) {
     let mut adv_data: Vec<u8, 31> = Vec::new();
@@ -358,6 +367,7 @@ pub async fn advertiser_task(
             scan_data,
         };
         info!("Advertising");
+        spawner.spawn(watchdog_task()).unwrap();
         let conn = peripheral::advertise_connectable(sd, adv, &config).await.unwrap();
 
         info!("connection established");

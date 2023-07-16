@@ -1,6 +1,7 @@
 #![no_std]
 
 mod fmt;
+
 mod crc;
 mod dfu;
 

@@ -1,3 +1,4 @@
+use embassy_boot::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig, FirmwareUpdaterError};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embedded_hal_02::blocking::delay::DelayMs;
@@ -7,17 +8,20 @@ use embedded_storage_async::nor_flash::NorFlash;
 use crate::crc::*;
 
 const DFU_PROTOCOL_VERSION: u8 = 0x01;
-const DFU_MTU: u16 = 32;
 const OBJ_TYPE_COMMAND_IDX: usize = 0;
 const OBJ_TYPE_DATA_IDX: usize = 1;
 
-pub struct DfuTarget {
+pub struct DfuTarget<const DFU_MTU: usize> {
     crc_receipt_interval: u16,
     receipt_count: u16,
     objects: [Object; 2],
     current: usize,
     fw_info: FirmwareInfo,
     hw_info: HardwareInfo,
+
+    // TODO: Generic const expression
+    magic: AlignedBuffer<4>,
+    buffer: AlignedBuffer<DFU_MTU>,
 }
 
 pub struct Object {
@@ -138,43 +142,48 @@ pub enum FirmwareType {
     Unknown,
 }
 
-pub struct DfuController<FLASH: NorFlash> {
-    //  channel: Channel<CriticalSectionRawMutex, DfuEvent, 10>,
-    flash: FLASH,
-    target: DfuTarget,
+pub struct DfuController<DFU: NorFlash, STATE: NorFlash, const DFU_MTU: usize> {
+    config: FirmwareUpdaterConfig<DFU, STATE>,
+    target: DfuTarget<DFU_MTU>,
 }
 
 pub enum Error {
-    /// The requested flash area is outside the flash
-    OutOfBounds,
-    /// Underlying flash error
+    Updater(FirmwareUpdaterError),
     Flash(NorFlashErrorKind),
+    Mtu,
 }
 
-impl<T> From<T> for Error
-where
-    T: NorFlashError,
-{
-    fn from(error: T) -> Self {
-        Self::Flash(error.kind())
+impl From<FirmwareUpdaterError> for Error {
+    fn from(error: FirmwareUpdaterError) -> Self {
+        Self::Updater(error)
     }
 }
 
-impl<FLASH: NorFlash> DfuController<FLASH> {
-    pub fn new(flash: FLASH, fw_info: FirmwareInfo, hw_info: HardwareInfo) -> DfuController<FLASH> {
-        let size = flash.capacity();
+impl From<NorFlashErrorKind> for Error {
+    fn from(error: NorFlashErrorKind) -> Self {
+        Self::Flash(error)
+    }
+}
+
+impl<DFU: NorFlash, STATE: NorFlash, const DFU_MTU: usize> DfuController<DFU, STATE, DFU_MTU> {
+    pub fn new(
+        config: FirmwareUpdaterConfig<DFU, STATE>,
+        fw_info: FirmwareInfo,
+        hw_info: HardwareInfo,
+    ) -> DfuController<DFU, STATE, DFU_MTU> {
+        let size = config.dfu.capacity();
         Self {
-            flash,
+            config,
             target: DfuTarget::new(size as u32, fw_info, hw_info),
         }
     }
 
     pub async fn process<'m>(&mut self, request: DfuRequest<'m>) -> Result<DfuResponse<'m>, Error> {
-        self.target.process(request, &mut self.flash).await
+        self.target.process(request, &mut self.config).await
     }
 }
 
-impl DfuTarget {
+impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
     pub fn new(size: u32, fw_info: FirmwareInfo, hw_info: HardwareInfo) -> Self {
         Self {
             crc_receipt_interval: 0,
@@ -193,16 +202,18 @@ impl DfuTarget {
                     size,
                 },
             ],
+            magic: AlignedBuffer([0; 4]),
+            buffer: AlignedBuffer([0; DFU_MTU]),
             current: 0,
             fw_info,
             hw_info,
         }
     }
 
-    pub async fn process<'m, FLASH: NorFlash>(
+    async fn process<'m, DFU: NorFlash, STATE: NorFlash>(
         &mut self,
         request: DfuRequest<'m>,
-        flash: &mut FLASH,
+        config: &mut FirmwareUpdaterConfig<DFU, STATE>,
     ) -> Result<DfuResponse<'m>, Error> {
         info!("DFU REQUEST: {:?}", request);
         let body = match request {
@@ -224,7 +235,9 @@ impl DfuTarget {
                     };
                     self.current = idx;
                     if let ObjectType::Data = obj_type {
-                        flash.erase(0, obj_size).await?;
+                        // Erase on page boundary
+                        let to = obj_size + (DFU::ERASE_SIZE as u32 - obj_size % DFU::ERASE_SIZE as u32);
+                        config.dfu.erase(0, to).await.map_err(|e| e.kind())?;
                     }
                 }
                 self.receipt_count = 0;
@@ -239,8 +252,16 @@ impl DfuTarget {
                 crc: self.objects[self.current].crc.finish(),
             }),
             DfuRequest::Execute => {
-                // TODO: If init packet, validate content
-                // TODO: If transfer complete, schedule validate and swap
+                let obj = &mut self.objects[self.current];
+                match obj.obj_type {
+                    ObjectType::Command => {
+                        // TODO: Validate content
+                    }
+                    ObjectType::Data => {
+                        // TODO: schedule validate and swap
+                    }
+                    ObjectType::Invalid => {}
+                }
                 None
             }
             DfuRequest::Select { obj_type } => {
@@ -260,12 +281,21 @@ impl DfuTarget {
                 }
             }
 
-            DfuRequest::MtuGet => Some(DfuResponseBody::Mtu { mtu: DFU_MTU }),
+            DfuRequest::MtuGet => Some(DfuResponseBody::Mtu { mtu: DFU_MTU as u16 }),
             DfuRequest::Write { data } => {
                 let obj = &mut self.objects[self.current];
 
                 if let ObjectType::Data = obj.obj_type {
-                    flash.write(obj.offset, data).await?;
+                    // Copy to aligned buffer first
+                    if data.len() > self.buffer.as_ref().len() {
+                        return Err(Error::Mtu);
+                    }
+                    self.buffer.as_mut()[0..data.len()].copy_from_slice(data);
+                    config
+                        .dfu
+                        .write(obj.offset, self.buffer.as_mut())
+                        .await
+                        .map_err(|e| e.kind())?;
                 }
 
                 obj.crc.add(data);
