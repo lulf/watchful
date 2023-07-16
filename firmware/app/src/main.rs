@@ -18,6 +18,7 @@ use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, pac, peripherals, spim};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Delay, Duration, Timer};
@@ -45,108 +46,6 @@ use {defmt_rtt as _, panic_probe as _};
 bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
 });
-
-const ATT_MTU: usize = 128;
-
-#[nrf_softdevice::gatt_service(uuid = "FE59")]
-pub struct NrfDfuService {
-    #[characteristic(uuid = "8EC90001-F315-4F60-9FB8-838830DAEA50", write, notify)]
-    control: Vec<u8, ATT_MTU>,
-
-    /// The maximum size of each packet is derived from the Att MTU size of the connection.
-    /// The maximum Att MTU size of the DFU Service is 256 bytes (saved in NRF_SDH_BLE_GATT_MAX_MTU_SIZE),
-    /// making the maximum size of the DFU Packet characteristic 253 bytes. (3 bytes are used for opcode and handle ID upon writing.)
-    #[characteristic(uuid = "8EC90002-F315-4F60-9FB8-838830DAEA50", write_without_response, notify)]
-    packet: Vec<u8, ATT_MTU>,
-}
-
-struct DfuConnection {
-    pub connection: Connection,
-    pub notify_control: bool,
-    pub notify_packet: bool,
-}
-
-enum DfuState {
-    WaitForData,
-    ReceiveFirmware,
-    Validate,
-}
-
-type Part = Partition<'static, NoopRawMutex, Flash>;
-type UpdateController = DfuController<Part, Part, ATT_MTU>;
-
-impl NrfDfuService {
-    fn process<F: FnOnce(&DfuConnection, &[u8]) -> Result<(), NotifyValueError>>(
-        &self,
-        controller: &mut UpdateController,
-        conn: &mut DfuConnection,
-        request: DfuRequest,
-        notify: F,
-    ) {
-        match block_on(controller.process(request)) {
-            Ok(response) => {
-                let mut buf: [u8; 512] = [0; 512];
-                match response.encode(&mut buf[..]) {
-                    Ok(len) => match notify(&conn, &buf[..len]) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            warn!("Error sending notification: {:?}", e);
-                        }
-                    },
-                    Err(e) => {
-                        warn!("Error encoding DFU response");
-                    }
-                }
-            }
-            Err(_) => {
-                warn!("Error processing DFU requst");
-            }
-        }
-    }
-
-    fn handle(&self, controller: &mut UpdateController, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
-        match event {
-            NrfDfuServiceEvent::ControlWrite(data) => {
-                if let Ok((request, _)) = DfuRequest::decode(&data) {
-                    self.process(controller, connection, request, |conn, response| {
-                        if conn.notify_control {
-                            self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
-                        }
-                        Ok(())
-                    });
-                }
-            }
-            NrfDfuServiceEvent::ControlCccdWrite { notifications } => {
-                connection.notify_control = notifications;
-            }
-            NrfDfuServiceEvent::PacketWrite(data) => {
-                let request = DfuRequest::Write { data: &data[..] };
-                self.process(controller, connection, request, |conn, response| {
-                    if conn.notify_packet {
-                        self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
-                    }
-                    Ok(())
-                });
-            }
-            NrfDfuServiceEvent::PacketCccdWrite { notifications } => {
-                connection.notify_packet = notifications;
-            }
-        }
-    }
-}
-
-#[nrf_softdevice::gatt_server]
-pub struct PineTimeServer {
-    dfu: NrfDfuService,
-}
-
-impl PineTimeServer {
-    fn handle(&self, controller: &mut UpdateController, conn: &mut DfuConnection, event: PineTimeServerEvent) {
-        match event {
-            PineTimeServerEvent::Dfu(event) => self.dfu.handle(controller, conn, event),
-        }
-    }
-}
 
 #[embassy_executor::main]
 async fn main(s: Spawner) {
@@ -251,6 +150,7 @@ async fn main(s: Spawner) {
     */
     //let font = FontRenderer::new::<fonts::u8g2_font_haxrcorp4089_t_cyrillic>();
 
+    s.spawn(watchdog_task()).unwrap();
     let mut state = WatchState::Idle;
     loop {
         match state {
@@ -318,9 +218,111 @@ async fn display_time(display: &mut Display) {
     .unwrap();
 }
 
+const ATT_MTU: usize = 128;
+
+#[nrf_softdevice::gatt_service(uuid = "FE59")]
+pub struct NrfDfuService {
+    #[characteristic(uuid = "8EC90001-F315-4F60-9FB8-838830DAEA50", write, notify)]
+    control: Vec<u8, ATT_MTU>,
+
+    /// The maximum size of each packet is derived from the Att MTU size of the connection.
+    /// The maximum Att MTU size of the DFU Service is 256 bytes (saved in NRF_SDH_BLE_GATT_MAX_MTU_SIZE),
+    /// making the maximum size of the DFU Packet characteristic 253 bytes. (3 bytes are used for opcode and handle ID upon writing.)
+    #[characteristic(uuid = "8EC90002-F315-4F60-9FB8-838830DAEA50", write_without_response, notify)]
+    packet: Vec<u8, ATT_MTU>,
+}
+
+struct DfuConnection {
+    pub connection: Connection,
+    pub notify_control: bool,
+    pub notify_packet: bool,
+}
+
+type Part = Partition<'static, NoopRawMutex, Flash>;
+type UpdateController = DfuController<Part, Part, ATT_MTU>;
+
+impl NrfDfuService {
+    async fn process<F: FnOnce(&DfuConnection, &[u8]) -> Result<(), NotifyValueError>>(
+        &self,
+        controller: &mut UpdateController,
+        conn: &mut DfuConnection,
+        request: DfuRequest<'_>,
+        notify: F,
+    ) {
+        match controller.process(request).await {
+            Ok(response) => {
+                let mut buf: [u8; 512] = [0; 512];
+                match response.encode(&mut buf[..]) {
+                    Ok(len) => match notify(&conn, &buf[..len]) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("Error sending notification: {:?}", e);
+                        }
+                    },
+                    Err(e) => {
+                        warn!("Error encoding DFU response: {:?}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Error processing DFU request: {:?}", defmt::Debug2Format(&e));
+            }
+        }
+    }
+
+    async fn handle(
+        &self,
+        controller: &mut UpdateController,
+        connection: &mut DfuConnection,
+        event: NrfDfuServiceEvent,
+    ) {
+        match event {
+            NrfDfuServiceEvent::ControlWrite(data) => {
+                if let Ok((request, _)) = DfuRequest::decode(&data) {
+                    self.process(controller, connection, request, |conn, response| {
+                        if conn.notify_control {
+                            self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
+                        }
+                        Ok(())
+                    })
+                    .await;
+                }
+            }
+            NrfDfuServiceEvent::ControlCccdWrite { notifications } => {
+                connection.notify_control = notifications;
+            }
+            NrfDfuServiceEvent::PacketWrite(data) => {
+                let request = DfuRequest::Write { data: &data[..] };
+                self.process(controller, connection, request, |conn, response| {
+                    if conn.notify_packet {
+                        self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
+                    }
+                    Ok(())
+                })
+                .await;
+            }
+            NrfDfuServiceEvent::PacketCccdWrite { notifications } => {
+                connection.notify_packet = notifications;
+            }
+        }
+    }
+}
+
+#[nrf_softdevice::gatt_server]
+pub struct PineTimeServer {
+    dfu: NrfDfuService,
+}
+
+impl PineTimeServer {
+    async fn handle(&self, controller: &mut UpdateController, conn: &mut DfuConnection, event: PineTimeServerEvent) {
+        match event {
+            PineTimeServerEvent::Dfu(event) => self.dfu.handle(controller, conn, event).await,
+        }
+    }
+}
+
 #[embassy_executor::task(pool_size = "4")]
 pub async fn gatt_server_task(
-    sd: &'static Softdevice,
     conn: Connection,
     server: &'static PineTimeServer,
     controller: &'static Mutex<CriticalSectionRawMutex, RefCell<UpdateController>>,
@@ -334,8 +336,29 @@ pub async fn gatt_server_task(
     let controller = controller.lock().await;
     let mut controller = controller.borrow_mut();
     info!("Running GATT server");
-    let _ = gatt_server::run(&conn, server, |e| server.handle(&mut controller, &mut dfu_conn, e)).await;
-    info!("Disconnected");
+    let channel: Channel<NoopRawMutex, PineTimeServerEvent, 1> = Channel::new();
+    let sender = channel.sender();
+    let receiver = channel.receiver();
+    match select(
+        gatt_server::run(&conn, server, |e| {
+            let _ = sender.try_send(e);
+        }),
+        async move {
+            loop {
+                let e = receiver.recv().await;
+                server.handle(&mut controller, &mut dfu_conn, e).await;
+            }
+        },
+    )
+    .await
+    {
+        Either::First(_) => {
+            info!("Disconnected");
+        }
+        Either::Second(_) => {
+            info!("DFU controller done");
+        }
+    }
 }
 
 #[embassy_executor::task]
@@ -367,11 +390,10 @@ pub async fn advertiser_task(
             scan_data,
         };
         info!("Advertising");
-        spawner.spawn(watchdog_task()).unwrap();
         let conn = peripheral::advertise_connectable(sd, adv, &config).await.unwrap();
 
-        info!("connection established");
-        if let Err(e) = spawner.spawn(gatt_server_task(sd, conn, server, controller)) {
+        info!("Connection established");
+        if let Err(e) = spawner.spawn(gatt_server_task(conn, server, controller)) {
             defmt::info!("Error spawning gatt task: {:?}", e);
         }
     }

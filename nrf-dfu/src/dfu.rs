@@ -147,6 +147,7 @@ pub struct DfuController<DFU: NorFlash, STATE: NorFlash, const DFU_MTU: usize> {
     target: DfuTarget<DFU_MTU>,
 }
 
+#[derive(Debug)]
 pub enum Error {
     Updater(FirmwareUpdaterError),
     Flash(NorFlashErrorKind),

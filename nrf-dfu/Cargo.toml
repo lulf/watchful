@@ -15,6 +15,10 @@ embedded-hal = "=1.0.0-alpha.11"
 embedded-hal-02 = { package = "embedded-hal", version = "0.2.6" }
 defmt = { version = "0.3", optional = true }
 
+[features]
+defmt = [
+      "dep:defmt",
+]
 
 [patch.crates-io]
 embassy-boot = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
