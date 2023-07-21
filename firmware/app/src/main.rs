@@ -220,7 +220,7 @@ async fn display_time(display: &mut Display) {
 }
 
 // Aligned to 4 bytes + 3 bytes for header
-const ATT_MTU: usize = 127;
+const ATT_MTU: usize = 27;
 
 #[nrf_softdevice::gatt_service(uuid = "FE59")]
 pub struct NrfDfuService {
@@ -338,34 +338,32 @@ pub async fn gatt_server_task(
     let controller = controller.lock().await;
     let mut controller = controller.borrow_mut();
     info!("Running GATT server");
-    let channel: Channel<NoopRawMutex, PineTimeServerEvent, 1> = Channel::new();
+    let channel: Channel<CriticalSectionRawMutex, PineTimeServerEvent, 300> = Channel::new();
     let sender = channel.sender();
     let receiver = channel.receiver();
 
     let run_fut = gatt_server::run(&conn, server, |e| {
         if let Err(e) = sender.try_send(e) {
-            warn!("Overflow receiving events, yielding");
+            panic!("Overflow receiving events");
+        } else {
+            //info!("Event queued");
         }
-        //let mut delay = Delay;
-        //use embedded_hal_02::blocking::delay::DelayMs;
-        //delay.delay_ms(50_u16);
     })
     .fuse();
-
     pin_mut!(run_fut);
+
     loop {
         select_biased! {
             e = receiver.recv().fuse() => {
-                info!("Handle event!");
+                //info!("Processing event");
                 server.handle(&mut controller, &mut dfu_conn, e).await;
+                //info!("Event processed");
             }
-            _ = run_fut => {
+            _ = &mut run_fut => {
                 info!("Disconnected");
                 break;
             }
         }
-        //yield_now().await;
-        Timer::after(Duration::from_millis(500)).await;
     }
 }
 

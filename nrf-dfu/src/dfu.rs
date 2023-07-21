@@ -261,6 +261,7 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
             DfuRequest::Execute => {
                 let obj = &mut self.objects[self.current];
                 if obj.offset != obj.size {
+                    info!("Uh oh wrong");
                     (DfuResult::OpNotSupported, None)
                 } else {
                     info!("SUCCESS");
