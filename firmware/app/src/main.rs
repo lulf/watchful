@@ -9,8 +9,8 @@ use display_interface_spi::SPIInterfaceNoCS;
 use embassy_boot_nrf::{FirmwareUpdater, FirmwareUpdaterConfig};
 use embassy_embedded_hal::flash::partition::Partition;
 use embassy_executor::Spawner;
-use embassy_futures::block_on;
 use embassy_futures::select::{select, Either};
+use embassy_futures::{block_on, yield_now};
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::interrupt::Priority;
 use embassy_nrf::peripherals::{P0_18, P0_26, TWISPI0};
@@ -32,6 +32,7 @@ use embedded_graphics::primitives::Rectangle;
 //use embedded_text::alignment::HorizontalAlignment;
 use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
 use embedded_text::TextBox;
+use futures::{pin_mut, select_biased, FutureExt};
 use heapless::Vec;
 use mipidsi::models::ST7789;
 use nrf_dfu::prelude::*;
@@ -218,7 +219,8 @@ async fn display_time(display: &mut Display) {
     .unwrap();
 }
 
-const ATT_MTU: usize = 128;
+// Aligned to 4 bytes + 3 bytes for header
+const ATT_MTU: usize = 127;
 
 #[nrf_softdevice::gatt_service(uuid = "FE59")]
 pub struct NrfDfuService {
@@ -321,7 +323,7 @@ impl PineTimeServer {
     }
 }
 
-#[embassy_executor::task(pool_size = "4")]
+#[embassy_executor::task(pool_size = "1")]
 pub async fn gatt_server_task(
     conn: Connection,
     server: &'static PineTimeServer,
@@ -339,25 +341,31 @@ pub async fn gatt_server_task(
     let channel: Channel<NoopRawMutex, PineTimeServerEvent, 1> = Channel::new();
     let sender = channel.sender();
     let receiver = channel.receiver();
-    match select(
-        gatt_server::run(&conn, server, |e| {
-            let _ = sender.try_send(e);
-        }),
-        async move {
-            loop {
-                let e = receiver.recv().await;
+
+    let run_fut = gatt_server::run(&conn, server, |e| {
+        if let Err(e) = sender.try_send(e) {
+            warn!("Overflow receiving events, yielding");
+        }
+        //let mut delay = Delay;
+        //use embedded_hal_02::blocking::delay::DelayMs;
+        //delay.delay_ms(50_u16);
+    })
+    .fuse();
+
+    pin_mut!(run_fut);
+    loop {
+        select_biased! {
+            e = receiver.recv().fuse() => {
+                info!("Handle event!");
                 server.handle(&mut controller, &mut dfu_conn, e).await;
             }
-        },
-    )
-    .await
-    {
-        Either::First(_) => {
-            info!("Disconnected");
+            _ = run_fut => {
+                info!("Disconnected");
+                break;
+            }
         }
-        Either::Second(_) => {
-            info!("DFU controller done");
-        }
+        //yield_now().await;
+        Timer::after(Duration::from_millis(500)).await;
     }
 }
 
@@ -411,7 +419,9 @@ fn enable_softdevice(name: &'static str) -> &'static mut Softdevice {
             conn_count: 2,
             event_length: 24,
         }),
-        conn_gatt: Some(raw::ble_gatt_conn_cfg_t { att_mtu: 128 }),
+        conn_gatt: Some(raw::ble_gatt_conn_cfg_t {
+            att_mtu: ATT_MTU as u16,
+        }),
         gatts_attr_tab_size: Some(raw::ble_gatts_cfg_attr_tab_size_t { attr_tab_size: 32768 }),
         gap_role_count: Some(raw::ble_gap_cfg_role_count_t {
             adv_set_count: 1,

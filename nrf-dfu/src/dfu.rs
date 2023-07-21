@@ -216,7 +216,7 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
         request: DfuRequest<'m>,
         config: &mut FirmwareUpdaterConfig<DFU, STATE>,
     ) -> Result<DfuResponse<'m>, Error> {
-        info!("DFU REQUEST: {:?}", request);
+        info!("DFU REQUEST {:?}", request);
         let (result, body) = match request {
             DfuRequest::ProtocolVersion => (
                 DfuResult::Success,
@@ -263,6 +263,7 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                 if obj.offset != obj.size {
                     (DfuResult::OpNotSupported, None)
                 } else {
+                    info!("SUCCESS");
                     (DfuResult::Success, None)
                 }
             }
@@ -286,7 +287,7 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                 }
             }
 
-            DfuRequest::MtuGet => (DfuResult::Success, Some(DfuResponseBody::Mtu { mtu: DFU_MTU as u16 })),
+            DfuRequest::MtuGet => (DfuResult::Success, Some(DfuResponseBody::Mtu { mtu: 1 as u16 })),
             DfuRequest::Write { data } => {
                 let obj = &mut self.objects[self.current];
 
@@ -295,10 +296,17 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                     if data.len() > self.buffer.as_ref().len() {
                         return Err(Error::Mtu);
                     }
-                    self.buffer.as_mut()[0..data.len()].copy_from_slice(data);
+                    self.buffer.0[0..data.len()].copy_from_slice(data);
+                    /*
+                    info!(
+                        "Buffer ({} bytes) at offset {}: {:?}",
+                        data.len(),
+                        obj.offset,
+                        &self.buffer.0.as_ptr()
+                    );*/
                     config
                         .dfu
-                        .write(obj.offset, self.buffer.as_mut())
+                        .write(obj.offset, &self.buffer.0[0..data.len()])
                         .await
                         .map_err(|e| e.kind())?;
                 }

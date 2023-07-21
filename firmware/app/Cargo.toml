@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 embassy-futures = { version = "0.1.0" }
+futures = { version = "0.3", default-features = false, features = ["async-await"]}
 embassy-embedded-hal = { version = "0.1.0" }
 embassy-sync = { version = "0.2.0" }
 embassy-executor = { version = "0.2.0", features = ["arch-cortex-m", "executor-thread", "nightly", "defmt", "integrated-timers"] }
