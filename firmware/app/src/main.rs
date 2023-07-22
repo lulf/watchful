@@ -83,13 +83,22 @@ async fn main(s: Spawner) {
 
     s.spawn(softdevice_task(sd)).unwrap();
 
-    static CONTROLLER: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<UpdateController>>> = StaticCell::new();
+    static STATE: DfuState = DfuState::new();
+
+    static TARGET: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Target>>> = StaticCell::new();
     let config = FirmwareUpdaterConfig::from_linkerfile(flash);
-    let controller = CONTROLLER.init(Mutex::new(RefCell::new(UpdateController::new(
-        config, fw_info, hw_info,
+
+    let target = TARGET.init(Mutex::new(RefCell::new(Target::new(
+        config.dfu.size(),
+        fw_info,
+        hw_info,
+        &STATE,
     ))));
 
-    s.spawn(advertiser_task(s, sd, server, controller, "Pinetime Embassy"))
+    let flasher = DfuFlash::new(config, &STATE);
+    s.spawn(flash_task(flasher)).unwrap();
+
+    s.spawn(advertiser_task(s, sd, server, target, "Pinetime Embassy"))
         .unwrap();
 
     info!("Hello world");
@@ -241,53 +250,41 @@ struct DfuConnection {
 }
 
 type Part = Partition<'static, NoopRawMutex, Flash>;
-type UpdateController = DfuController<Part, Part, ATT_MTU>;
+type Target = DfuTarget<ATT_MTU>;
 
 impl NrfDfuService {
-    async fn process<F: FnOnce(&DfuConnection, &[u8]) -> Result<(), NotifyValueError>>(
+    fn process<F: FnOnce(&DfuConnection, &[u8]) -> Result<(), NotifyValueError>>(
         &self,
-        controller: &mut UpdateController,
+        target: &mut Target,
         conn: &mut DfuConnection,
         request: DfuRequest<'_>,
         notify: F,
     ) {
-        match controller.process(request).await {
-            Ok(response) => {
-                let mut buf: [u8; 512] = [0; 512];
-                match response.encode(&mut buf[..]) {
-                    Ok(len) => match notify(&conn, &buf[..len]) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            warn!("Error sending notification: {:?}", e);
-                        }
-                    },
-                    Err(e) => {
-                        warn!("Error encoding DFU response: {:?}", e);
-                    }
+        let response = target.process(request);
+        let mut buf: [u8; 512] = [0; 512];
+        match response.encode(&mut buf[..]) {
+            Ok(len) => match notify(&conn, &buf[..len]) {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("Error sending notification: {:?}", e);
                 }
-            }
+            },
             Err(e) => {
-                warn!("Error processing DFU request: {:?}", defmt::Debug2Format(&e));
+                warn!("Error encoding DFU response: {:?}", e);
             }
         }
     }
 
-    async fn handle(
-        &self,
-        controller: &mut UpdateController,
-        connection: &mut DfuConnection,
-        event: NrfDfuServiceEvent,
-    ) {
+    fn handle(&self, target: &mut Target, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
         match event {
             NrfDfuServiceEvent::ControlWrite(data) => {
                 if let Ok((request, _)) = DfuRequest::decode(&data) {
-                    self.process(controller, connection, request, |conn, response| {
+                    self.process(target, connection, request, |conn, response| {
                         if conn.notify_control {
                             self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                         }
                         Ok(())
-                    })
-                    .await;
+                    });
                 }
             }
             NrfDfuServiceEvent::ControlCccdWrite { notifications } => {
@@ -295,13 +292,12 @@ impl NrfDfuService {
             }
             NrfDfuServiceEvent::PacketWrite(data) => {
                 let request = DfuRequest::Write { data: &data[..] };
-                self.process(controller, connection, request, |conn, response| {
+                self.process(target, connection, request, |conn, response| {
                     if conn.notify_packet {
                         self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                     }
                     Ok(())
-                })
-                .await;
+                });
             }
             NrfDfuServiceEvent::PacketCccdWrite { notifications } => {
                 connection.notify_packet = notifications;
@@ -316,18 +312,23 @@ pub struct PineTimeServer {
 }
 
 impl PineTimeServer {
-    async fn handle(&self, controller: &mut UpdateController, conn: &mut DfuConnection, event: PineTimeServerEvent) {
+    fn handle(&self, target: &mut Target, conn: &mut DfuConnection, event: PineTimeServerEvent) {
         match event {
-            PineTimeServerEvent::Dfu(event) => self.dfu.handle(controller, conn, event).await,
+            PineTimeServerEvent::Dfu(event) => self.dfu.handle(target, conn, event),
         }
     }
+}
+
+#[embassy_executor::task(pool_size = "1")]
+pub async fn flash_task(mut flash: DfuFlash<Part, Part, 1024>) {
+    flash.run().await;
 }
 
 #[embassy_executor::task(pool_size = "1")]
 pub async fn gatt_server_task(
     conn: Connection,
     server: &'static PineTimeServer,
-    controller: &'static Mutex<CriticalSectionRawMutex, RefCell<UpdateController>>,
+    target: &'static Mutex<CriticalSectionRawMutex, RefCell<Target>>,
 ) {
     let mut dfu_conn = DfuConnection {
         connection: conn.clone(),
@@ -335,36 +336,15 @@ pub async fn gatt_server_task(
         notify_packet: false,
     };
 
-    let controller = controller.lock().await;
-    let mut controller = controller.borrow_mut();
+    let target = target.lock().await;
+    let mut target = target.borrow_mut();
     info!("Running GATT server");
-    let channel: Channel<CriticalSectionRawMutex, PineTimeServerEvent, 300> = Channel::new();
-    let sender = channel.sender();
-    let receiver = channel.receiver();
 
-    let run_fut = gatt_server::run(&conn, server, |e| {
-        if let Err(e) = sender.try_send(e) {
-            panic!("Overflow receiving events");
-        } else {
-            //info!("Event queued");
-        }
+    let _ = gatt_server::run(&conn, server, |e| {
+        server.handle(&mut target, &mut dfu_conn, e);
     })
-    .fuse();
-    pin_mut!(run_fut);
-
-    loop {
-        select_biased! {
-            e = receiver.recv().fuse() => {
-                //info!("Processing event");
-                server.handle(&mut controller, &mut dfu_conn, e).await;
-                //info!("Event processed");
-            }
-            _ = &mut run_fut => {
-                info!("Disconnected");
-                break;
-            }
-        }
-    }
+    .await;
+    info!("Disconnected");
 }
 
 #[embassy_executor::task]
@@ -372,7 +352,7 @@ pub async fn advertiser_task(
     spawner: Spawner,
     sd: &'static Softdevice,
     server: &'static PineTimeServer,
-    controller: &'static Mutex<CriticalSectionRawMutex, RefCell<UpdateController>>,
+    target: &'static Mutex<CriticalSectionRawMutex, RefCell<Target>>,
     name: &'static str,
 ) {
     let mut adv_data: Vec<u8, 31> = Vec::new();
@@ -399,7 +379,7 @@ pub async fn advertiser_task(
         let conn = peripheral::advertise_connectable(sd, adv, &config).await.unwrap();
 
         info!("Connection established");
-        if let Err(e) = spawner.spawn(gatt_server_task(conn, server, controller)) {
+        if let Err(e) = spawner.spawn(gatt_server_task(conn, server, target)) {
             defmt::info!("Error spawning gatt task: {:?}", e);
         }
     }

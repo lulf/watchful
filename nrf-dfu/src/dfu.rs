@@ -1,6 +1,8 @@
 use embassy_boot::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig, FirmwareUpdaterError};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
+use embassy_futures::select::{select, Either};
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::channel::{Channel, Receiver, Sender};
+use embassy_sync::pipe::{Pipe, Reader, Writer};
 use embedded_hal_02::blocking::delay::DelayMs;
 use embedded_storage::nor_flash::{NorFlashError, NorFlashErrorKind};
 use embedded_storage_async::nor_flash::NorFlash;
@@ -11,6 +13,21 @@ const DFU_PROTOCOL_VERSION: u8 = 0x01;
 const OBJ_TYPE_COMMAND_IDX: usize = 0;
 const OBJ_TYPE_DATA_IDX: usize = 1;
 
+const BUFFER_SIZE: usize = 6000;
+
+type CommandChannel = Channel<CriticalSectionRawMutex, Command, 1>;
+type DataPipe = Pipe<CriticalSectionRawMutex, BUFFER_SIZE>;
+
+type CommandReader<'d> = Receiver<'d, CriticalSectionRawMutex, Command, 1>;
+type DataReader<'d> = Reader<'d, CriticalSectionRawMutex, BUFFER_SIZE>;
+
+type CommandWriter<'d> = Sender<'d, CriticalSectionRawMutex, Command, 1>;
+type DataWriter<'d> = Writer<'d, CriticalSectionRawMutex, BUFFER_SIZE>;
+
+pub enum Command {
+    Prepare { size: u32 },
+}
+
 pub struct DfuTarget<const DFU_MTU: usize> {
     crc_receipt_interval: u16,
     receipt_count: u16,
@@ -19,9 +36,8 @@ pub struct DfuTarget<const DFU_MTU: usize> {
     fw_info: FirmwareInfo,
     hw_info: HardwareInfo,
 
-    // TODO: Generic const expression
-    magic: AlignedBuffer<4>,
-    buffer: AlignedBuffer<DFU_MTU>,
+    command: CommandWriter<'static>,
+    data: DataWriter<'static>,
 }
 
 pub struct Object {
@@ -142,9 +158,79 @@ pub enum FirmwareType {
     Unknown,
 }
 
-pub struct DfuController<DFU: NorFlash, STATE: NorFlash, const DFU_MTU: usize> {
+pub struct DfuState {
+    command: CommandChannel,
+    data: DataPipe,
+}
+
+impl DfuState {
+    pub const fn new() -> Self {
+        Self {
+            command: CommandChannel::new(),
+            data: DataPipe::new(),
+        }
+    }
+}
+
+pub struct DfuFlash<DFU: NorFlash, STATE: NorFlash, const DFU_MTU: usize> {
     config: FirmwareUpdaterConfig<DFU, STATE>,
-    target: DfuTarget<DFU_MTU>,
+    magic: AlignedBuffer<4>,
+    buffer: AlignedBuffer<DFU_MTU>,
+    offset: usize,
+
+    command: CommandReader<'static>,
+    data: DataReader<'static>,
+}
+
+impl<DFU: NorFlash, STATE: NorFlash, const DFU_MTU: usize> DfuFlash<DFU, STATE, DFU_MTU> {
+    pub fn new(config: FirmwareUpdaterConfig<DFU, STATE>, state: &'static DfuState) -> DfuFlash<DFU, STATE, DFU_MTU> {
+        Self {
+            config,
+            magic: AlignedBuffer([0; 4]),
+            buffer: AlignedBuffer([0; DFU_MTU]),
+            offset: 0,
+
+            command: state.command.receiver(),
+            data: state.data.reader(),
+        }
+    }
+
+    pub async fn run(&mut self) -> ! {
+        let mut boffset = 0;
+        loop {
+            match select(self.command.recv(), self.data.read(&mut self.buffer.0[boffset..])).await {
+                Either::First(Command::Prepare { size }) => {
+                    // Erase on page boundary
+                    let to = size + (DFU::ERASE_SIZE as u32 - size % DFU::ERASE_SIZE as u32);
+                    match self.config.dfu.erase(0, to as u32).await {
+                        Ok(_) => {
+                            info!("Erase operation complete");
+                            self.offset = 0;
+                        }
+                        Err(e) => {
+                            warn!("Error during erase: {:?}", defmt::Debug2Format(&e));
+                        }
+                    }
+                }
+                Either::Second(len) => {
+                    if boffset == self.buffer.0.len() {
+                        match self.config.dfu.write(self.offset as u32, &self.buffer.0).await {
+                            Ok(_) => {
+                                self.offset += boffset;
+                                info!("Wrote {} bytes to flash (total {})", boffset, self.offset);
+                                boffset = 0;
+                            }
+                            Err(e) => {
+                                warn!("Error during write: {:?}", defmt::Debug2Format(&e));
+                            }
+                        }
+                    } else {
+                        boffset += len;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -166,26 +252,8 @@ impl From<NorFlashErrorKind> for Error {
     }
 }
 
-impl<DFU: NorFlash, STATE: NorFlash, const DFU_MTU: usize> DfuController<DFU, STATE, DFU_MTU> {
-    pub fn new(
-        config: FirmwareUpdaterConfig<DFU, STATE>,
-        fw_info: FirmwareInfo,
-        hw_info: HardwareInfo,
-    ) -> DfuController<DFU, STATE, DFU_MTU> {
-        let size = config.dfu.capacity();
-        Self {
-            config,
-            target: DfuTarget::new(size as u32, fw_info, hw_info),
-        }
-    }
-
-    pub async fn process<'m>(&mut self, request: DfuRequest<'m>) -> Result<DfuResponse<'m>, Error> {
-        self.target.process(request, &mut self.config).await
-    }
-}
-
 impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
-    pub fn new(size: u32, fw_info: FirmwareInfo, hw_info: HardwareInfo) -> Self {
+    pub fn new(size: u32, fw_info: FirmwareInfo, hw_info: HardwareInfo, state: &'static DfuState) -> Self {
         Self {
             crc_receipt_interval: 0,
             receipt_count: 0,
@@ -203,27 +271,29 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                     size,
                 },
             ],
-            magic: AlignedBuffer([0; 4]),
-            buffer: AlignedBuffer([0; DFU_MTU]),
+
             current: 0,
             fw_info,
             hw_info,
+
+            command: state.command.sender(),
+            data: state.data.writer(),
         }
     }
+    pub fn process<'m>(&mut self, request: DfuRequest<'m>) -> DfuResponse<'m> {
+        trace!("DFU REQUEST {:?}", request);
+        let response = self.process_inner(request);
+        trace!("DFU RESPONSE {:?}", response);
+        response
+    }
 
-    async fn process<'m, DFU: NorFlash, STATE: NorFlash>(
-        &mut self,
-        request: DfuRequest<'m>,
-        config: &mut FirmwareUpdaterConfig<DFU, STATE>,
-    ) -> Result<DfuResponse<'m>, Error> {
-        info!("DFU REQUEST {:?}", request);
-        let (result, body) = match request {
-            DfuRequest::ProtocolVersion => (
-                DfuResult::Success,
-                Some(DfuResponseBody::ProtocolVersion {
+    pub fn process_inner<'m>(&mut self, request: DfuRequest<'m>) -> DfuResponse<'m> {
+        match request {
+            DfuRequest::ProtocolVersion => {
+                DfuResponse::new(request, DfuResult::Success).body(DfuResponseBody::ProtocolVersion {
                     version: DFU_PROTOCOL_VERSION,
-                }),
-            ),
+                })
+            }
             DfuRequest::Create { obj_type, obj_size } => {
                 let idx = match obj_type {
                     ObjectType::Command => Some(OBJ_TYPE_COMMAND_IDX),
@@ -239,33 +309,32 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                     };
                     self.current = idx;
                     if let ObjectType::Data = obj_type {
-                        // Erase on page boundary
-                        let to = obj_size + (DFU::ERASE_SIZE as u32 - obj_size % DFU::ERASE_SIZE as u32);
-                        config.dfu.erase(0, to).await.map_err(|e| e.kind())?;
+                        info!("SENDING PREPARE OP");
+                        if let Err(e) = self.command.try_send(Command::Prepare { size: obj_size }) {
+                            //warn!("Command Full!");
+                            return DfuResponse::new(request, DfuResult::OpFailed);
+                        }
                     }
                 }
                 self.receipt_count = 0;
-                (DfuResult::Success, None)
+                DfuResponse::new(request, DfuResult::Success)
             }
             DfuRequest::SetReceiptNotification { target } => {
                 self.crc_receipt_interval = target;
-                (DfuResult::Success, None)
+                DfuResponse::new(request, DfuResult::Success)
             }
-            DfuRequest::Crc => (
-                DfuResult::Success,
-                Some(DfuResponseBody::Crc {
-                    offset: self.objects[self.current].offset,
-                    crc: self.objects[self.current].crc.finish(),
-                }),
-            ),
+            DfuRequest::Crc => DfuResponse::new(request, DfuResult::Success).body(DfuResponseBody::Crc {
+                offset: self.objects[self.current].offset,
+                crc: self.objects[self.current].crc.finish(),
+            }),
             DfuRequest::Execute => {
+                info!("EXECUTE OP");
                 let obj = &mut self.objects[self.current];
                 if obj.offset != obj.size {
-                    info!("Uh oh wrong");
-                    (DfuResult::OpNotSupported, None)
+                    DfuResponse::new(request, DfuResult::OpNotSupported)
                 } else {
                     info!("SUCCESS");
-                    (DfuResult::Success, None)
+                    DfuResponse::new(request, DfuResult::Success)
                 }
             }
             DfuRequest::Select { obj_type } => {
@@ -275,96 +344,85 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                     _ => None,
                 };
                 if let Some(idx) = idx {
-                    (
-                        DfuResult::Success,
-                        Some(DfuResponseBody::Select {
-                            offset: self.objects[idx].offset,
-                            crc: self.objects[idx].crc.finish(),
-                            max_size: self.objects[idx].size,
-                        }),
-                    )
+                    DfuResponse::new(request, DfuResult::Success).body(DfuResponseBody::Select {
+                        offset: self.objects[idx].offset,
+                        crc: self.objects[idx].crc.finish(),
+                        max_size: self.objects[idx].size,
+                    })
                 } else {
-                    (DfuResult::InvalidObject, None)
+                    DfuResponse::new(request, DfuResult::InvalidObject)
                 }
             }
 
-            DfuRequest::MtuGet => (DfuResult::Success, Some(DfuResponseBody::Mtu { mtu: 1 as u16 })),
+            DfuRequest::MtuGet => {
+                DfuResponse::new(request, DfuResult::Success).body(DfuResponseBody::Mtu { mtu: 1 as u16 })
+            }
             DfuRequest::Write { data } => {
                 let obj = &mut self.objects[self.current];
 
                 if let ObjectType::Data = obj.obj_type {
-                    // Copy to aligned buffer first
-                    if data.len() > self.buffer.as_ref().len() {
-                        return Err(Error::Mtu);
+                    match self.data.try_write(data) {
+                        Ok(written) => {
+                            if written < data.len() {
+                                // warn!("Short write");
+                                // return DfuResponse::new(request, DfuResult::OpFailed);
+                                return DfuResponse::new(request, DfuResult::Success);
+                            }
+                        }
+                        Err(e) => {
+                            // warn!("Error write");
+                            // return DfuResponse::new(request, DfuResult::OpFailed);
+                            return DfuResponse::new(request, DfuResult::Success);
+                        }
                     }
-                    self.buffer.0[0..data.len()].copy_from_slice(data);
-                    /*
-                    info!(
-                        "Buffer ({} bytes) at offset {}: {:?}",
-                        data.len(),
-                        obj.offset,
-                        &self.buffer.0.as_ptr()
-                    );*/
-                    config
-                        .dfu
-                        .write(obj.offset, &self.buffer.0[0..data.len()])
-                        .await
-                        .map_err(|e| e.kind())?;
                 }
 
                 obj.crc.add(data);
                 obj.offset += data.len() as u32;
 
-                let body = if self.crc_receipt_interval > 0 {
+                let mut response = DfuResponse::new(request, DfuResult::Success);
+                if self.crc_receipt_interval > 0 {
                     self.receipt_count += 1;
                     if self.receipt_count == self.crc_receipt_interval {
                         self.receipt_count = 0;
-                        Some(DfuResponseBody::Crc {
+                        response = response.body(DfuResponseBody::Crc {
                             offset: obj.offset,
                             crc: obj.crc.finish(),
-                        })
-                    } else {
-                        None
+                        });
                     }
                 } else {
-                    Some(DfuResponseBody::Crc {
+                    response = response.body(DfuResponseBody::Crc {
                         offset: obj.offset,
                         crc: obj.crc.finish(),
-                    })
+                    });
                 };
-                (DfuResult::Success, body)
+                response
             }
-            DfuRequest::Ping { id } => (DfuResult::Success, Some(DfuResponseBody::Ping { id })),
-            DfuRequest::HwVersion => (
-                DfuResult::Success,
-                Some(DfuResponseBody::HwVersion {
-                    part: self.hw_info.part,
-                    variant: self.hw_info.variant,
-                    rom_size: self.hw_info.rom_size,
-                    ram_size: self.hw_info.ram_size,
-                    rom_page_size: self.hw_info.rom_page_size,
-                }),
-            ),
-            DfuRequest::FwVersion { image_id } => (
-                DfuResult::Success,
-                Some(DfuResponseBody::FwVersion {
+            DfuRequest::Ping { id } => DfuResponse::new(request, DfuResult::Success).body(DfuResponseBody::Ping { id }),
+            DfuRequest::HwVersion => DfuResponse::new(request, DfuResult::Success).body(DfuResponseBody::HwVersion {
+                part: self.hw_info.part,
+                variant: self.hw_info.variant,
+                rom_size: self.hw_info.rom_size,
+                ram_size: self.hw_info.ram_size,
+                rom_page_size: self.hw_info.rom_page_size,
+            }),
+            DfuRequest::FwVersion { image_id } => {
+                DfuResponse::new(request, DfuResult::Success).body(DfuResponseBody::FwVersion {
                     ftype: self.fw_info.ftype,
                     version: self.fw_info.version,
                     addr: self.fw_info.addr,
                     len: self.fw_info.len,
-                }),
-            ),
+                })
+            }
             DfuRequest::Abort => {
                 self.objects[0].crc.reset();
                 self.objects[0].offset = 0;
                 self.objects[1].crc.reset();
                 self.objects[1].offset = 0;
                 self.receipt_count = 0;
-                (DfuResult::Success, None)
+                DfuResponse::new(request, DfuResult::Success)
             }
-        };
-        info!("DFU RESPONSE: {:?} {:?}", result, body);
-        Ok(DfuResponse { request, result, body })
+        }
     }
 }
 
@@ -430,6 +488,21 @@ impl<'m> DfuRequest<'m> {
 }
 
 impl<'m> DfuResponse<'m> {
+    pub fn new(request: DfuRequest<'m>, result: DfuResult) -> DfuResponse<'m> {
+        DfuResponse {
+            request,
+            result,
+            body: None,
+        }
+    }
+
+    pub fn body(self, body: DfuResponseBody) -> Self {
+        Self {
+            request: self.request,
+            result: self.result,
+            body: Some(body),
+        }
+    }
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, ()> {
         let mut buf = WriteBuf::new(buf);
         const DFU_RESPONSE_OP_CODE: u8 = 0x60;
