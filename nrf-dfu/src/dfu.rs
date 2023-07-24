@@ -1,4 +1,5 @@
 use embassy_boot::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig, FirmwareUpdaterError};
+use embassy_futures::block_on;
 use embassy_futures::select::{select, Either};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel::{Channel, Receiver, Sender};
@@ -13,25 +14,15 @@ const DFU_PROTOCOL_VERSION: u8 = 0x01;
 const OBJ_TYPE_COMMAND_IDX: usize = 0;
 const OBJ_TYPE_DATA_IDX: usize = 1;
 
-const BUFFER_SIZE: usize = 6000;
-
-type CommandChannel = Channel<CriticalSectionRawMutex, Command, 1>;
-type DataPipe = Pipe<CriticalSectionRawMutex, BUFFER_SIZE>;
-
-type CommandReader<'d> = Receiver<'d, CriticalSectionRawMutex, Command, 1>;
-type DataReader<'d> = Reader<'d, CriticalSectionRawMutex, BUFFER_SIZE>;
-
-type CommandWriter<'d> = Sender<'d, CriticalSectionRawMutex, Command, 1>;
-type DataWriter<'d> = Writer<'d, CriticalSectionRawMutex, BUFFER_SIZE>;
-
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Command {
-    Prepare { size: u32 },
     Swap { crc: u32, size: u32 },
 }
 
 /// Represents the target of a firmware update. Dispatches commands and data to
 /// a channel and data pipe which can be consumed by a separate async task.
-pub struct DfuTarget<const DFU_MTU: usize> {
+pub struct DfuTarget<DFU: NorFlash> {
     crc_receipt_interval: u16,
     receipt_count: u16,
     objects: [Object; 2],
@@ -39,8 +30,15 @@ pub struct DfuTarget<const DFU_MTU: usize> {
     fw_info: FirmwareInfo,
     hw_info: HardwareInfo,
 
-    command: CommandWriter<'static>,
-    data: DataWriter<'static>,
+    // TODO: Configurable
+    magic: AlignedBuffer<4>,
+    buffer: AlignedBuffer<4096>,
+
+    flash: DFU,
+
+    boffset: usize,
+    offset: usize,
+    mtu: u16,
 }
 
 /// Object representing a firmware blob. Tracks information about the firmware to be updated such as the CRC.
@@ -96,7 +94,7 @@ pub struct DfuResponse<'m> {
 }
 
 /// Possible result values for a response.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum DfuResult {
     Invalid,
@@ -152,7 +150,7 @@ pub enum DfuResponseBody {
 }
 
 /// Object types supported by the protocol.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ObjectType {
     Invalid = 0,
@@ -168,112 +166,6 @@ pub enum FirmwareType {
     Application,
     Bootloader,
     Unknown,
-}
-
-/// State containing command and data channels shared between target and flash.
-pub struct DfuState {
-    command: CommandChannel,
-    data: DataPipe,
-}
-
-/// Represents the storage of firmware which consumes data from the data pipe and command channel.
-pub struct DfuFlash<DFU: NorFlash, STATE: NorFlash, const DFU_MTU: usize> {
-    config: FirmwareUpdaterConfig<DFU, STATE>,
-    magic: AlignedBuffer<4>,
-    buffer: AlignedBuffer<DFU_MTU>,
-    offset: usize,
-
-    command: CommandReader<'static>,
-    data: DataReader<'static>,
-}
-
-impl DfuState {
-    /// Crate a new instance of state.
-    pub const fn new() -> Self {
-        Self {
-            command: CommandChannel::new(),
-            data: DataPipe::new(),
-        }
-    }
-}
-
-impl<DFU: NorFlash, STATE: NorFlash, const DFU_MTU: usize> DfuFlash<DFU, STATE, DFU_MTU> {
-    pub fn new(config: FirmwareUpdaterConfig<DFU, STATE>, state: &'static DfuState) -> DfuFlash<DFU, STATE, DFU_MTU> {
-        Self {
-            config,
-            magic: AlignedBuffer([0; 4]),
-            buffer: AlignedBuffer([0; DFU_MTU]),
-            offset: 0,
-
-            command: state.command.receiver(),
-            data: state.data.reader(),
-        }
-    }
-
-    pub async fn run(&mut self) -> ! {
-        let mut boffset = 0;
-        loop {
-            match select(self.command.recv(), self.data.read(&mut self.buffer.0[boffset..])).await {
-                Either::First(Command::Prepare { size }) => {
-                    // Erase on page boundary
-                    let to = size + (DFU::ERASE_SIZE as u32 - size % DFU::ERASE_SIZE as u32);
-                    match self.config.dfu.erase(0, to as u32).await {
-                        Ok(_) => {
-                            info!("Erase operation complete");
-                            self.offset = 0;
-                        }
-                        Err(e) => {
-                            #[cfg(feature = "defmt")]
-                            let e = defmt::Debug2Format(&e);
-                            warn!("Error during erase: {:?}", e);
-                        }
-                    }
-                }
-                Either::First(Command::Swap { crc, size }) => {
-                    info!("Verifying firmware integrity");
-                    let mut check = Crc32::init();
-                    let mut buf = [0; 32];
-                    let mut offset: u32 = 0;
-                    while offset < size {
-                        match self.config.dfu.read(offset, &mut buf[..]).await {
-                            Ok(_) => {
-                                check.add(&buf[..]);
-                                offset += buf.len() as u32;
-                            }
-                            Err(e) => {
-                                warn!("Error verifying firmware integrity");
-                                break;
-                            }
-                        }
-                    }
-
-                    if crc == check.finish() {
-                        info!("Firmware CRC check success");
-                    } else {
-                        warn!("Firmware CRC check error");
-                    }
-                }
-                Either::Second(len) => {
-                    if boffset == self.buffer.0.len() {
-                        match self.config.dfu.write(self.offset as u32, &self.buffer.0).await {
-                            Ok(_) => {
-                                self.offset += boffset;
-                                info!("Wrote {} bytes to flash (total {})", boffset, self.offset);
-                                boffset = 0;
-                            }
-                            Err(e) => {
-                                #[cfg(feature = "defmt")]
-                                let e = defmt::Debug2Format(&e);
-                                warn!("Error during write: {:?}", e);
-                            }
-                        }
-                    } else {
-                        boffset += len;
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -295,8 +187,9 @@ impl From<NorFlashErrorKind> for Error {
     }
 }
 
-impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
-    pub fn new(size: u32, fw_info: FirmwareInfo, hw_info: HardwareInfo, state: &'static DfuState) -> Self {
+impl<DFU: NorFlash> DfuTarget<DFU> {
+    pub fn new(flash: DFU, mtu: u16, fw_info: FirmwareInfo, hw_info: HardwareInfo) -> Self {
+        let flash_size = flash.capacity() as u32;
         Self {
             crc_receipt_interval: 0,
             receipt_count: 0,
@@ -311,7 +204,7 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                     obj_type: ObjectType::Data,
                     offset: 0,
                     crc: Crc32::init(),
-                    size,
+                    size: flash_size,
                 },
             ],
 
@@ -319,14 +212,29 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
             fw_info,
             hw_info,
 
-            command: state.command.sender(),
-            data: state.data.writer(),
+            magic: AlignedBuffer([0; 4]),
+            buffer: AlignedBuffer([0; 4096]),
+
+            offset: 0,
+            boffset: 0,
+            mtu,
+            flash,
         }
     }
+
     pub fn process<'m>(&mut self, request: DfuRequest<'m>) -> DfuResponse<'m> {
         trace!("DFU REQUEST {:?}", request);
         let response = self.process_inner(request);
         trace!("DFU RESPONSE {:?}", response);
+
+        /*
+        let obj = self.objects[self.current];
+        if response.request == DfuRequest::Execute
+            && obj.obj_type == ObjectType::Data
+            && response.result == DfuResult::Success
+        {
+            return response;
+        } else {}*/
         response
     }
 
@@ -352,10 +260,18 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                     };
                     self.current = idx;
                     if let ObjectType::Data = obj_type {
-                        info!("SENDING PREPARE OP");
-                        if let Err(e) = self.command.try_send(Command::Prepare { size: obj_size }) {
-                            //warn!("Command Full!");
-                            return DfuResponse::new(request, DfuResult::OpFailed);
+                        let size = self.objects[self.current].size;
+                        let to = size + (DFU::ERASE_SIZE as u32 - size % DFU::ERASE_SIZE as u32);
+                        match block_on(self.flash.erase(0, to as u32)) {
+                            Ok(_) => {
+                                info!("Erase operation complete");
+                                self.objects[self.current].offset = 0;
+                            }
+                            Err(e) => {
+                                #[cfg(feature = "defmt")]
+                                let e = defmt::Debug2Format(&e);
+                                warn!("Error during erase: {:?}", e);
+                            }
                         }
                     }
                 }
@@ -375,12 +291,15 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                 if obj.offset != obj.size {
                     DfuResponse::new(request, DfuResult::OpNotSupported)
                 } else {
-                    if let Err(e) = self.command.try_send(Command::Swap {
-                        crc: obj.crc.finish(),
-                        size: obj.size,
-                    }) {
-                        warn!("Error sending swap instruction");
-                        DfuResponse::new(request, DfuResult::OpFailed)
+                    if let ObjectType::Data = obj.obj_type {
+                        if let Err(e) = self.flush() {
+                            #[cfg(feature = "defmt")]
+                            let e = defmt::Debug2Format(&e);
+                            warn!("Error flushing buffer: {:?}", e);
+                            DfuResponse::new(request, DfuResult::OpFailed)
+                        } else {
+                            DfuResponse::new(request, DfuResult::Success)
+                        }
                     } else {
                         DfuResponse::new(request, DfuResult::Success)
                     }
@@ -404,28 +323,18 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
             }
 
             DfuRequest::MtuGet => {
-                DfuResponse::new(request, DfuResult::Success).body(DfuResponseBody::Mtu { mtu: 1 as u16 })
+                DfuResponse::new(request, DfuResult::Success).body(DfuResponseBody::Mtu { mtu: self.mtu })
             }
             DfuRequest::Write { data } => {
-                let obj = &mut self.objects[self.current];
-
-                if let ObjectType::Data = obj.obj_type {
-                    match self.data.try_write(data) {
-                        Ok(written) => {
-                            if written < data.len() {
-                                // warn!("Short write");
-                                // return DfuResponse::new(request, DfuResult::OpFailed);
-                                return DfuResponse::new(request, DfuResult::Success);
-                            }
-                        }
-                        Err(e) => {
-                            // warn!("Error write");
-                            // return DfuResponse::new(request, DfuResult::OpFailed);
-                            return DfuResponse::new(request, DfuResult::Success);
-                        }
+                if let ObjectType::Data = self.objects[self.current].obj_type {
+                    if let Err(e) = self.write(data) {
+                        #[cfg(feature = "defmt")]
+                        let e = defmt::Debug2Format(&e);
+                        warn!("Write Error: {:?}", e);
+                        return DfuResponse::new(request, DfuResult::OpFailed);
                     }
                 }
-
+                let obj = &mut self.objects[self.current];
                 obj.crc.add(data);
                 obj.offset += data.len() as u32;
 
@@ -472,6 +381,49 @@ impl<const DFU_MTU: usize> DfuTarget<DFU_MTU> {
                 DfuResponse::new(request, DfuResult::Success)
             }
         }
+    }
+
+    fn write(&mut self, data: &[u8]) -> Result<(), Error> {
+        let mut copied = 0;
+        while copied < data.len() {
+            if self.boffset == self.buffer.0.len() {
+                match block_on(self.flash.write(self.offset as u32, &self.buffer.0)) {
+                    Ok(_) => {
+                        self.offset += self.boffset;
+                        info!("Wrote {} bytes to flash (total {})", self.boffset, self.offset);
+                        self.boffset = 0;
+                    }
+                    Err(e) => {
+                        return Err(Error::Flash(e.kind()));
+                    }
+                }
+            } else {
+                let to_copy = core::cmp::min(self.buffer.0.len() - self.boffset, data.len() - copied);
+                self.buffer.0[self.boffset as usize..self.boffset as usize + to_copy]
+                    .copy_from_slice(&data[copied..copied + to_copy]);
+                self.boffset += to_copy;
+                copied += to_copy;
+            }
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), Error> {
+        if self.boffset > 0 {
+            let size = self.boffset as u32;
+            let to = size + (DFU::WRITE_SIZE as u32 - size % DFU::WRITE_SIZE as u32);
+            match block_on(self.flash.write(self.offset as u32, &self.buffer.0[..to as usize])) {
+                Ok(_) => {
+                    self.offset += self.boffset;
+                    info!("Wrote {} bytes to flash (total {})", self.boffset, self.offset);
+                    self.boffset = 0;
+                }
+                Err(e) => {
+                    return Err(Error::Flash(e.kind()));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
