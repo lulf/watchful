@@ -48,12 +48,12 @@ bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
 });
 
-static EXECUTOR_MED: InterruptExecutor = InterruptExecutor::new();
-
-#[interrupt]
-unsafe fn SWI0_EGU0() {
-    EXECUTOR_MED.on_interrupt()
-}
+//static EXECUTOR_MED: InterruptExecutor = InterruptExecutor::new();
+//
+//#[interrupt]
+//unsafe fn SWI0_EGU0() {
+//    EXECUTOR_MED.on_interrupt()
+//}
 
 pub fn from_linkerfile(
     flash: &'static embassy_sync::mutex::Mutex<CriticalSectionRawMutex, Flash>,
@@ -114,10 +114,10 @@ async fn main(s: Spawner) {
     static GATT: StaticCell<PineTimeServer> = StaticCell::new();
     let server = GATT.init(PineTimeServer::new(sd).unwrap());
 
-    interrupt::SWI0_EGU0.set_priority(Priority::P5);
-    let sd_spawner = EXECUTOR_MED.start(interrupt::SWI0_EGU0);
-    sd_spawner.spawn(softdevice_task(sd)).unwrap();
-    sd_spawner.spawn(watchdog_task()).unwrap();
+    //interrupt::SWI0_EGU0.set_priority(Priority::P5);
+    //let sd_spawner = EXECUTOR_MED.start(interrupt::SWI0_EGU0);
+    s.spawn(softdevice_task(sd)).unwrap();
+    s.spawn(watchdog_task()).unwrap();
 
     static TARGET: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Target>>> = StaticCell::new();
     let config = from_linkerfile(flash);
