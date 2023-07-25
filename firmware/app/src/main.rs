@@ -47,7 +47,7 @@ bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
 });
 
-// Higher priority executor for running the DfuFlash task.
+// Higher priority executor for running the DfuFlash task and softdevice soc task.
 static EXECUTOR_MED: InterruptExecutor = InterruptExecutor::new();
 #[interrupt]
 unsafe fn SWI0_EGU0() {
@@ -96,7 +96,7 @@ async fn main(s: Spawner) {
     static GATT: StaticCell<PineTimeServer> = StaticCell::new();
     let server = GATT.init(PineTimeServer::new(sd).unwrap());
 
-    s.spawn(softdevice_task(sd)).unwrap();
+    s.spawn(softdevice_ble_task(sd)).unwrap();
 
     static DFU_STATE: DfuState<MTU> = DfuState::new();
 
@@ -111,8 +111,9 @@ async fn main(s: Spawner) {
     // Run flasher task at higher priority to guarantee flow control
     let flash = DfuFlasher::new(&DFU_STATE);
     interrupt::SWI0_EGU0.set_priority(Priority::P5);
-    EXECUTOR_MED
-        .start(interrupt::SWI0_EGU0)
+    let spawn_med = EXECUTOR_MED.start(interrupt::SWI0_EGU0);
+    spawn_med.spawn(softdevice_soc_task(sd)).unwrap();
+    spawn_med
         .spawn(flash_task(
             flash,
             FlashTaskConfig {
@@ -460,8 +461,13 @@ fn enable_softdevice(name: &'static str) -> &'static mut Softdevice {
 }
 
 #[embassy_executor::task]
-async fn softdevice_task(sd: &'static Softdevice) {
-    sd.run().await;
+async fn softdevice_ble_task(sd: &'static Softdevice) {
+    sd.run_ble().await;
+}
+
+#[embassy_executor::task]
+async fn softdevice_soc_task(sd: &'static Softdevice) {
+    sd.run_soc().await;
 }
 
 // Keeps our system alive

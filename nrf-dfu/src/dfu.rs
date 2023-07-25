@@ -14,7 +14,7 @@ const OBJ_TYPE_COMMAND_IDX: usize = 0;
 const OBJ_TYPE_DATA_IDX: usize = 1;
 
 // Max number of commands.
-const MAX_COMMANDS: usize = 1;
+const MAX_COMMANDS: usize = 32;
 
 type CommandChannel<const MTU: usize> = Channel<CriticalSectionRawMutex, Command<MTU>, MAX_COMMANDS>;
 type CommandReader<'d, const MTU: usize> = Receiver<'d, CriticalSectionRawMutex, Command<MTU>, MAX_COMMANDS>;
@@ -253,13 +253,14 @@ impl<const MTU: usize> DfuFlasher<MTU> {
 
                     if crc == check.finish() {
                         info!("Firmware CRC check success");
-                        updater.mark_updated(&mut self.buffer.0).await?;
+                        updater.mark_updated(&mut self.magic.0).await?;
                         break;
                     } else {
                         warn!("Firmware CRC check error");
                     }
                 }
                 Command::Write { data } => {
+                    //info!("Write {} bytes ({} written so far)", data.len(), self.offset);
                     if let Err(e) = self.write(dfu, &data[..]).await {
                         #[cfg(feature = "defmt")]
                         let e = defmt::Debug2Format(&e);
@@ -276,6 +277,7 @@ impl<const MTU: usize> DfuFlasher<MTU> {
         let mut pos = 0;
         while pos < data.len() {
             let to_copy = core::cmp::min(data.len() - pos, self.buffer.0.len());
+            // info!("Copying {} bytes to internal buffer", to_copy);
             self.buffer.0[..to_copy].copy_from_slice(&data[pos..pos + to_copy]);
 
             dfu.write(self.offset as u32, &self.buffer.0[..to_copy])
@@ -283,7 +285,7 @@ impl<const MTU: usize> DfuFlasher<MTU> {
                 .map_err(|e| Error::Flash(e.kind()))?;
             self.offset += to_copy;
             pos += to_copy;
-            info!("Wrote {} bytes to flash (total {})", to_copy, self.offset);
+            // info!("Wrote {} bytes to flash (total {})", to_copy, self.offset);
         }
         Ok(())
     }
@@ -385,18 +387,22 @@ impl<const MTU: usize> DfuTarget<MTU> {
                 if obj.offset != obj.size {
                     DfuResponse::new(request, DfuResult::OpNotSupported)
                 } else {
-                    let mut retries = 3;
-                    while retries > 0 {
-                        if let Err(e) = self.command.try_send(Command::Swap {
-                            crc: obj.crc.finish(),
-                            size: obj.size,
-                        }) {
-                            retries -= 1;
-                        } else {
-                            return DfuResponse::new(request, DfuResult::Success);
+                    if let ObjectType::Data = obj.obj_type {
+                        let mut retries = 3;
+                        while retries > 0 {
+                            if let Err(e) = self.command.try_send(Command::Swap {
+                                crc: obj.crc.finish(),
+                                size: obj.size,
+                            }) {
+                                retries -= 1;
+                            } else {
+                                return DfuResponse::new(request, DfuResult::Success);
+                            }
                         }
+                        DfuResponse::new(request, DfuResult::OpFailed)
+                    } else {
+                        return DfuResponse::new(request, DfuResult::Success);
                     }
-                    DfuResponse::new(request, DfuResult::OpFailed)
                 }
             }
             DfuRequest::Select { obj_type } => {

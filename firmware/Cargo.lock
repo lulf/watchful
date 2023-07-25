@@ -764,7 +764,6 @@ dependencies = [
 [[package]]
 name = "nrf-softdevice"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/nrf-softdevice.git?rev=3f4913f3791869fed5c8c152e9c0874658debfec#3f4913f3791869fed5c8c152e9c0874658debfec"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
@@ -785,7 +784,6 @@ dependencies = [
 [[package]]
 name = "nrf-softdevice-macro"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/nrf-softdevice.git?rev=3f4913f3791869fed5c8c152e9c0874658debfec#3f4913f3791869fed5c8c152e9c0874658debfec"
 dependencies = [
  "Inflector",
  "darling 0.13.4",
@@ -798,17 +796,15 @@ dependencies = [
 [[package]]
 name = "nrf-softdevice-mbr"
 version = "0.1.1"
-source = "git+https://github.com/embassy-rs/nrf-softdevice.git?branch=master#3f4913f3791869fed5c8c152e9c0874658debfec"
 
 [[package]]
 name = "nrf-softdevice-mbr"
 version = "0.1.1"
-source = "git+https://github.com/embassy-rs/nrf-softdevice.git?rev=3f4913f3791869fed5c8c152e9c0874658debfec#3f4913f3791869fed5c8c152e9c0874658debfec"
+source = "git+https://github.com/embassy-rs/nrf-softdevice.git?branch=master#3f4913f3791869fed5c8c152e9c0874658debfec"
 
 [[package]]
 name = "nrf-softdevice-s132"
 version = "0.1.1"
-source = "git+https://github.com/embassy-rs/nrf-softdevice.git?rev=3f4913f3791869fed5c8c152e9c0874658debfec#3f4913f3791869fed5c8c152e9c0874658debfec"
 
 [[package]]
 name = "nrf52805-pac"
@@ -1030,7 +1026,7 @@ dependencies = [
  "embedded-io",
  "embedded-storage",
  "embedded-storage-async",
- "nrf-softdevice-mbr 0.1.1 (git+https://github.com/embassy-rs/nrf-softdevice.git?rev=3f4913f3791869fed5c8c152e9c0874658debfec)",
+ "nrf-softdevice-mbr 0.1.1",
  "static_cell",
 ]
 
