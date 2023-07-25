@@ -8,15 +8,15 @@ use defmt::{info, warn, Format};
 use display_interface_spi::SPIInterfaceNoCS;
 use embassy_boot_nrf::{FirmwareUpdater, FirmwareUpdaterConfig};
 use embassy_embedded_hal::flash::partition::Partition;
-use embassy_executor::Spawner;
+use embassy_executor::{InterruptExecutor, Spawner};
 use embassy_futures::select::{select, Either};
 use embassy_futures::{block_on, yield_now};
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
-use embassy_nrf::interrupt::Priority;
+use embassy_nrf::interrupt::{InterruptExt, Priority};
 use embassy_nrf::peripherals::{P0_18, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
-use embassy_nrf::{bind_interrupts, pac, peripherals, spim};
+use embassy_nrf::{bind_interrupts, interrupt, pac, peripherals, spim};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
@@ -48,8 +48,20 @@ bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
 });
 
+// Higher priority executor for running the DfuFlash task.
+static EXECUTOR_MED: InterruptExecutor = InterruptExecutor::new();
+#[interrupt]
+unsafe fn SWI0_EGU0() {
+    EXECUTOR_MED.on_interrupt()
+}
+
+type Part = Partition<'static, NoopRawMutex, Flash>;
+type Target = DfuTarget<ATT_MTU>;
+type Flasher = DfuFlasher<Part, Part, 1024>;
+
 #[embassy_executor::main]
 async fn main(s: Spawner) {
+    // Read out hardware info and firmware info first.
     let p = unsafe { pac::Peripherals::steal() };
     let part = p.FICR.info.part.read().part().bits();
     let variant = p.FICR.info.variant.read().variant().bits();
@@ -69,34 +81,44 @@ async fn main(s: Spawner) {
         len: 0,
     };
 
+    // Set peripheral priorities
     let mut config = embassy_nrf::config::Config::default();
     config.gpiote_interrupt_priority = Priority::P2;
     config.time_interrupt_priority = Priority::P2;
     let p = embassy_nrf::init(config);
 
+    // Enable softdevice
     let sd = enable_softdevice("Pinetime Embassy");
-    static FLASH: StaticCell<Mutex<NoopRawMutex, Flash>> = StaticCell::new();
-    let flash = FLASH.init(Mutex::new(Flash::take(sd)));
 
     static GATT: StaticCell<PineTimeServer> = StaticCell::new();
     let server = GATT.init(PineTimeServer::new(sd).unwrap());
 
     s.spawn(softdevice_task(sd)).unwrap();
 
-    static STATE: DfuState = DfuState::new();
+    static DFU_STATE: DfuState = DfuState::new();
 
-    static TARGET: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Target>>> = StaticCell::new();
+    // Configure flash access.
+    static FLASH: StaticCell<Mutex<NoopRawMutex, Flash>> = StaticCell::new();
+    let flash = FLASH.init(Mutex::new(Flash::take(sd)));
+
+    // Reads the partitions config from the linkerfile and defines the needed partitions.
     let config = FirmwareUpdaterConfig::from_linkerfile(flash);
 
+    // Run flasher task at higher priority to guarantee flow control
+    let flash = DfuFlash::new(config, &DFU_STATE);
+    interrupt::SWI0_EGU0.set_priority(Priority::P5);
+    EXECUTOR_MED
+        .start(interrupt::SWI0_EGU0)
+        .spawn(flash_task(flash))
+        .unwrap();
+
+    static TARGET: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Target>>> = StaticCell::new();
     let target = TARGET.init(Mutex::new(RefCell::new(Target::new(
         config.dfu.size(),
         fw_info,
         hw_info,
         &STATE,
     ))));
-
-    let flasher = DfuFlash::new(config, &STATE);
-    s.spawn(flash_task(flasher)).unwrap();
 
     s.spawn(advertiser_task(s, sd, server, target, "Pinetime Embassy"))
         .unwrap();
@@ -248,9 +270,6 @@ struct DfuConnection {
     pub notify_control: bool,
     pub notify_packet: bool,
 }
-
-type Part = Partition<'static, NoopRawMutex, Flash>;
-type Target = DfuTarget<ATT_MTU>;
 
 impl NrfDfuService {
     fn process<F: FnOnce(&DfuConnection, &[u8]) -> Result<(), NotifyValueError>>(

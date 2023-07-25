@@ -9,7 +9,7 @@ embassy-futures = { version = "0.1.0" }
 futures = { version = "0.3", default-features = false, features = ["async-await"]}
 embassy-embedded-hal = { version = "0.1.0" }
 embassy-sync = { version = "0.2.0" }
-embassy-executor = { version = "0.2.0", features = ["arch-cortex-m", "executor-thread", "nightly", "defmt", "integrated-timers"] }
+embassy-executor = { version = "0.2.0", features = ["arch-cortex-m", "executor-thread", "nightly", "defmt", "integrated-timers", "executor-interrupt"] }
 embassy-time = { version = "0.1.0", features = ["defmt", "defmt-timestamp-uptime", "unstable-traits"] }
 embassy-nrf = { version = "0.1.0", features = ["defmt", "nrf52832", "time-driver-rtc1", "gpiote", "nightly", "unstable-pac", "time"] }
 embassy-boot-nrf = { version = "0.1.0", features = ["nightly"] }
