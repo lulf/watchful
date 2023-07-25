@@ -44,7 +44,7 @@ bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
 });
 
-const MTU: usize = 24;
+const MTU: usize = 120;
 // Aligned to 4 bytes + 3 bytes for header
 const ATT_MTU: usize = MTU + 3;
 
