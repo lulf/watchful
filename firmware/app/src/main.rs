@@ -6,7 +6,7 @@ use core::cell::RefCell;
 
 use defmt::{info, warn, Format};
 use display_interface_spi::SPIInterfaceNoCS;
-use embassy_boot_nrf::{FirmwareUpdater, FirmwareUpdaterConfig};
+use embassy_boot_nrf::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig};
 use embassy_embedded_hal::flash::partition::Partition;
 use embassy_executor::{InterruptExecutor, Spawner};
 use embassy_futures::select::{select, Either};
@@ -29,6 +29,7 @@ use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::{BinaryColor, Rgb565 as Rgb};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
+use embedded_storage_async::nor_flash::NorFlash;
 //use embedded_text::alignment::HorizontalAlignment;
 use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
 use embedded_text::TextBox;
@@ -48,88 +49,43 @@ bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
 });
 
-//static EXECUTOR_MED: InterruptExecutor = InterruptExecutor::new();
-//
-//#[interrupt]
-//unsafe fn SWI0_EGU0() {
-//    EXECUTOR_MED.on_interrupt()
-//}
+const MTU: usize = 24;
+// Aligned to 4 bytes + 3 bytes for header
+const ATT_MTU: usize = MTU + 3;
 
-pub fn from_linkerfile(
-    flash: &'static embassy_sync::mutex::Mutex<CriticalSectionRawMutex, Flash>,
-) -> FirmwareUpdaterConfig<Part, Part> {
-    extern "C" {
-        static __bootloader_state_start: u32;
-        static __bootloader_state_end: u32;
-        static __bootloader_dfu_start: u32;
-        static __bootloader_dfu_end: u32;
-    }
+type Target = DfuTarget<MTU>;
 
-    let dfu = unsafe {
-        let start = &__bootloader_dfu_start as *const u32 as u32;
-        let end = &__bootloader_dfu_end as *const u32 as u32;
+static EXECUTOR_MED: InterruptExecutor = InterruptExecutor::new();
 
-        Partition::new(flash, start, end - start)
-    };
-    let state = unsafe {
-        let start = &__bootloader_state_start as *const u32 as u32;
-        let end = &__bootloader_state_end as *const u32 as u32;
-
-        Partition::new(flash, start, end - start)
-    };
-
-    FirmwareUpdaterConfig { dfu, state }
+#[interrupt]
+unsafe fn SWI0_EGU0() {
+    EXECUTOR_MED.on_interrupt()
 }
 
 #[embassy_executor::main]
 async fn main(s: Spawner) {
-    let p = unsafe { pac::Peripherals::steal() };
-    let part = p.FICR.info.part.read().part().bits();
-    let variant = p.FICR.info.variant.read().variant().bits();
-
-    let hw_info = HardwareInfo {
-        part,
-        variant,
-        rom_size: 0,
-        ram_size: 0,
-        rom_page_size: 0,
-    };
-
-    let fw_info = FirmwareInfo {
-        ftype: FirmwareType::Application,
-        version: 1,
-        addr: 0,
-        len: 0,
-    };
-
     let mut config = embassy_nrf::config::Config::default();
     config.gpiote_interrupt_priority = Priority::P2;
     config.time_interrupt_priority = Priority::P2;
     let p = embassy_nrf::init(config);
 
     let sd = enable_softdevice("Pinetime Embassy");
-    static FLASH: StaticCell<Mutex<CriticalSectionRawMutex, Flash>> = StaticCell::new();
+    static FLASH: StaticCell<Mutex<NoopRawMutex, Flash>> = StaticCell::new();
     let flash = FLASH.init(Mutex::new(Flash::take(sd)));
 
     static GATT: StaticCell<PineTimeServer> = StaticCell::new();
     let server = GATT.init(PineTimeServer::new(sd).unwrap());
 
-    //interrupt::SWI0_EGU0.set_priority(Priority::P5);
-    //let sd_spawner = EXECUTOR_MED.start(interrupt::SWI0_EGU0);
-    s.spawn(softdevice_task(sd)).unwrap();
+    interrupt::SWI0_EGU0.set_priority(Priority::P5);
+    EXECUTOR_MED
+        .start(interrupt::SWI0_EGU0)
+        .spawn(softdevice_soc_task(sd))
+        .unwrap();
+
+    s.spawn(softdevice_ble_task(sd)).unwrap();
     s.spawn(watchdog_task()).unwrap();
 
-    static TARGET: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Target>>> = StaticCell::new();
-    let config = from_linkerfile(flash);
-
-    let target = TARGET.init(Mutex::new(RefCell::new(Target::new(
-        config.dfu,
-        ATT_MTU as u16,
-        fw_info,
-        hw_info,
-    ))));
-
-    s.spawn(advertiser_task(s, sd, server, target, "Pinetime Embassy"))
+    s.spawn(advertiser_task(s, sd, server, flash, "Pinetime Embassy"))
         .unwrap();
 
     info!("Hello world");
@@ -258,9 +214,6 @@ async fn display_time(display: &mut Display) {
     .unwrap();
 }
 
-// Aligned to 4 bytes + 3 bytes for header
-const ATT_MTU: usize = 27;
-
 #[nrf_softdevice::gatt_service(uuid = "FE59")]
 pub struct NrfDfuService {
     #[characteristic(uuid = "8EC90001-F315-4F60-9FB8-838830DAEA50", write, notify)]
@@ -279,19 +232,17 @@ struct DfuConnection {
     pub notify_packet: bool,
 }
 
-type Part = Partition<'static, CriticalSectionRawMutex, Flash>;
-type Target = DfuTarget<Part>;
-
 impl NrfDfuService {
-    fn process<F: FnOnce(&DfuConnection, &[u8]) -> Result<(), NotifyValueError>>(
+    fn process<DFU: NorFlash, F: FnOnce(&DfuConnection, &[u8]) -> Result<(), NotifyValueError>>(
         &self,
         target: &mut Target,
+        dfu: &mut DFU,
         conn: &mut DfuConnection,
         request: DfuRequest<'_>,
         notify: F,
-    ) {
-        let response = target.process(request);
-        let mut buf: [u8; 512] = [0; 512];
+    ) -> DfuStatus {
+        let (response, status) = target.process(request, dfu);
+        let mut buf: [u8; 32] = [0; 32];
         match response.encode(&mut buf[..]) {
             Ok(len) => match notify(&conn, &buf[..len]) {
                 Ok(_) => {}
@@ -303,18 +254,25 @@ impl NrfDfuService {
                 warn!("Error encoding DFU response: {:?}", e);
             }
         }
+        status
     }
 
-    fn handle(&self, target: &mut Target, connection: &mut DfuConnection, event: NrfDfuServiceEvent) {
+    fn handle<DFU: NorFlash>(
+        &self,
+        target: &mut Target,
+        dfu: &mut DFU,
+        connection: &mut DfuConnection,
+        event: NrfDfuServiceEvent,
+    ) -> Option<DfuStatus> {
         match event {
             NrfDfuServiceEvent::ControlWrite(data) => {
                 if let Ok((request, _)) = DfuRequest::decode(&data) {
-                    self.process(target, connection, request, |conn, response| {
+                    return Some(self.process(target, dfu, connection, request, |conn, response| {
                         if conn.notify_control {
                             self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                         }
                         Ok(())
-                    });
+                    }));
                 }
             }
             NrfDfuServiceEvent::ControlCccdWrite { notifications } => {
@@ -322,17 +280,18 @@ impl NrfDfuService {
             }
             NrfDfuServiceEvent::PacketWrite(data) => {
                 let request = DfuRequest::Write { data: &data[..] };
-                self.process(target, connection, request, |conn, response| {
+                return Some(self.process(target, dfu, connection, request, |conn, response| {
                     if conn.notify_packet {
                         self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                     }
                     Ok(())
-                });
+                }));
             }
             NrfDfuServiceEvent::PacketCccdWrite { notifications } => {
                 connection.notify_packet = notifications;
             }
         }
+        None
     }
 }
 
@@ -342,9 +301,15 @@ pub struct PineTimeServer {
 }
 
 impl PineTimeServer {
-    fn handle(&self, target: &mut Target, conn: &mut DfuConnection, event: PineTimeServerEvent) {
+    fn handle<DFU: NorFlash>(
+        &self,
+        target: &mut Target,
+        dfu: &mut DFU,
+        conn: &mut DfuConnection,
+        event: PineTimeServerEvent,
+    ) -> Option<DfuStatus> {
         match event {
-            PineTimeServerEvent::Dfu(event) => self.dfu.handle(target, conn, event),
+            PineTimeServerEvent::Dfu(event) => self.dfu.handle(target, dfu, conn, event),
         }
     }
 }
@@ -353,20 +318,62 @@ impl PineTimeServer {
 pub async fn gatt_server_task(
     conn: Connection,
     server: &'static PineTimeServer,
-    target: &'static Mutex<CriticalSectionRawMutex, RefCell<Target>>,
+    flash: &'static Mutex<NoopRawMutex, Flash>,
 ) {
+    let p = unsafe { pac::Peripherals::steal() };
+    let part = p.FICR.info.part.read().part().bits();
+    let variant = p.FICR.info.variant.read().variant().bits();
+
+    let hw_info = HardwareInfo {
+        part,
+        variant,
+        rom_size: 0,
+        ram_size: 0,
+        rom_page_size: 0,
+    };
+
+    let fw_info = FirmwareInfo {
+        ftype: FirmwareType::Application,
+        version: 1,
+        addr: 0,
+        len: 0,
+    };
+
     let mut dfu_conn = DfuConnection {
         connection: conn.clone(),
         notify_control: false,
         notify_packet: false,
     };
 
-    let target = target.lock().await;
-    let mut target = target.borrow_mut();
     info!("Running GATT server");
+    let config = FirmwareUpdaterConfig::from_linkerfile(flash);
+    let mut target = DfuTarget::new(config.dfu.size(), fw_info, hw_info);
+    let mut magic = AlignedBuffer([0; 4]);
+    let mut updater = FirmwareUpdater::new(config);
+    updater
+        .mark_booted(&mut magic.0[..])
+        .await
+        .expect("Failed to mark current firmware as good");
+
+    let dfu = updater
+        .prepare_update(&mut magic.0[..])
+        .await
+        .expect("Failed to prepare DFU partition");
 
     let _ = gatt_server::run(&conn, server, |e| {
-        server.handle(&mut target, &mut dfu_conn, e);
+        if let Some(DfuStatus::Done) = server.handle(&mut target, dfu, &mut dfu_conn, e) {
+            let config = FirmwareUpdaterConfig::from_linkerfile(flash);
+            let mut updater = FirmwareUpdater::new(config);
+            match block_on(updater.mark_updated(&mut magic.0[..])) {
+                Ok(_) => {
+                    info!("Firmware updated, resetting");
+                    cortex_m::peripheral::SCB::sys_reset();
+                }
+                Err(e) => {
+                    panic!("Error marking firmware updated: {:?}", e);
+                }
+            }
+        }
     })
     .await;
     info!("Disconnected");
@@ -377,7 +384,7 @@ pub async fn advertiser_task(
     spawner: Spawner,
     sd: &'static Softdevice,
     server: &'static PineTimeServer,
-    target: &'static Mutex<CriticalSectionRawMutex, RefCell<Target>>,
+    flash: &'static Mutex<NoopRawMutex, Flash>,
     name: &'static str,
 ) {
     let mut adv_data: Vec<u8, 31> = Vec::new();
@@ -404,7 +411,7 @@ pub async fn advertiser_task(
         let conn = peripheral::advertise_connectable(sd, adv, &config).await.unwrap();
 
         info!("Connection established");
-        if let Err(e) = spawner.spawn(gatt_server_task(conn, server, target)) {
+        if let Err(e) = spawner.spawn(gatt_server_task(conn, server, flash)) {
             defmt::info!("Error spawning gatt task: {:?}", e);
         }
     }
@@ -446,8 +453,13 @@ fn enable_softdevice(name: &'static str) -> &'static mut Softdevice {
 }
 
 #[embassy_executor::task]
-async fn softdevice_task(sd: &'static Softdevice) {
-    sd.run().await;
+async fn softdevice_soc_task(sd: &'static Softdevice) {
+    sd.run_soc().await;
+}
+
+#[embassy_executor::task]
+async fn softdevice_ble_task(sd: &'static Softdevice) {
+    sd.run_ble().await;
 }
 
 // Keeps our system alive
@@ -455,7 +467,6 @@ async fn softdevice_task(sd: &'static Softdevice) {
 async fn watchdog_task() {
     let mut handle = unsafe { embassy_nrf::wdt::WatchdogHandle::steal(0) };
     loop {
-        info!("PET");
         handle.pet();
         Timer::after(Duration::from_secs(4)).await;
     }
