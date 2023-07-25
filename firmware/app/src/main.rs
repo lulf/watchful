@@ -2,8 +2,6 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use core::cell::RefCell;
-
 use defmt::{info, warn, Format};
 use display_interface_spi::SPIInterfaceNoCS;
 use embassy_boot_nrf::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig};
@@ -15,7 +13,8 @@ use embassy_nrf::peripherals::{P0_18, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, interrupt, pac, peripherals, spim};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::channel::{Channel, DynamicSender, Sender};
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::image::{Image, ImageRawLE};
@@ -40,6 +39,8 @@ use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
 use {defmt_rtt as _, panic_probe as _};
 
+mod cts;
+
 bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
 });
@@ -50,11 +51,12 @@ const ATT_MTU: usize = MTU + 3;
 
 type Target = DfuTarget<MTU>;
 
-static EXECUTOR_MED: InterruptExecutor = InterruptExecutor::new();
+// Executor for processing soc events from softdevice at a higher priority.
+static EXECUTOR_SOC: InterruptExecutor = InterruptExecutor::new();
 
 #[interrupt]
 unsafe fn SWI0_EGU0() {
-    EXECUTOR_MED.on_interrupt()
+    EXECUTOR_SOC.on_interrupt()
 }
 
 #[embassy_executor::main]
@@ -72,7 +74,7 @@ async fn main(s: Spawner) {
     let server = GATT.init(PineTimeServer::new(sd).unwrap());
 
     interrupt::SWI0_EGU0.set_priority(Priority::P5);
-    EXECUTOR_MED
+    EXECUTOR_SOC
         .start(interrupt::SWI0_EGU0)
         .spawn(softdevice_soc_task())
         .unwrap();
@@ -293,6 +295,48 @@ impl NrfDfuService {
 #[nrf_softdevice::gatt_server]
 pub struct PineTimeServer {
     dfu: NrfDfuService,
+    cts: CurrentTimeService,
+}
+
+#[nrf_softdevice::gatt_service(uuid = "1805")]
+pub struct CurrentTimeService {
+    #[characteristic(uuid = "00002a2b-0000-1000-8000-00805f9b34fb", write, read)]
+    current_time: Vec<u8, 10>,
+}
+
+type TimeKeeper = DynamicSender<'static, time::PrimitiveDateTime>;
+
+impl CurrentTimeService {
+    fn handle(&self, e: CurrentTimeServiceEvent, time_keeper: &mut TimeKeeper) {
+        match e {
+            CurrentTimeServiceEvent::CurrentTimeWrite(data) => {
+                if data.len() == 10 {
+                    let year = u16::from_le_bytes([data[0], data[1]]);
+                    let month = data[2];
+                    let day = data[3];
+                    let hour = data[4];
+                    let minute = data[5];
+                    let second = data[6];
+                    let _weekday = data[7];
+                    let micros_div = data[8];
+
+                    if let Ok(month) = month.try_into() {
+                        let date = time::Date::from_calendar_date(year as i32, month, day);
+                        let micros = 256 * 1000000 * micros_div as u32;
+                        let time = time::Time::from_hms_micro(hour, minute, second, micros);
+                        if let (Ok(time), Ok(date)) = (time, date) {
+                            let dt = time::PrimitiveDateTime::new(date, time);
+
+                            #[cfg(feature = "defmt")]
+                            info!("Setting time to {:?}", defmt::Debug2Format(&dt));
+
+                            let _ = time_keeper.try_send(dt);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl PineTimeServer {
@@ -300,11 +344,16 @@ impl PineTimeServer {
         &self,
         target: &mut Target,
         dfu: &mut DFU,
+        time_keeper: &mut TimeKeeper,
         conn: &mut DfuConnection,
         event: PineTimeServerEvent,
     ) -> Option<DfuStatus> {
         match event {
             PineTimeServerEvent::Dfu(event) => self.dfu.handle(target, dfu, conn, event),
+            PineTimeServerEvent::Cts(event) => {
+                self.cts.handle(event, time_keeper);
+                None
+            }
         }
     }
 }
@@ -355,8 +404,11 @@ pub async fn gatt_server_task(
         .await
         .expect("Failed to prepare DFU partition");
 
+    static TIME_KEEPER: Channel<CriticalSectionRawMutex, time::PrimitiveDateTime, 1> = Channel::new();
+    let mut time_keeper = TIME_KEEPER.sender().into();
+
     let _ = gatt_server::run(&conn, server, |e| {
-        if let Some(DfuStatus::Done) = server.handle(&mut target, dfu, &mut dfu_conn, e) {
+        if let Some(DfuStatus::Done) = server.handle(&mut target, dfu, &mut time_keeper, &mut dfu_conn, e) {
             let config = FirmwareUpdaterConfig::from_linkerfile(flash);
             let mut updater = FirmwareUpdater::new(config);
             match block_on(updater.mark_updated(&mut magic.0[..])) {
