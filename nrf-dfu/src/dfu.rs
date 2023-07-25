@@ -1,11 +1,6 @@
-use embassy_boot::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig, FirmwareUpdaterError};
+use embassy_boot::{AlignedBuffer, FirmwareUpdaterError};
 use embassy_futures::block_on;
-use embassy_futures::select::{select, Either};
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
-use embassy_sync::channel::{Channel, Receiver, Sender};
-use embassy_sync::pipe::{Pipe, Reader, Writer};
-use embedded_hal_02::blocking::delay::DelayMs;
-use embedded_storage::nor_flash::{NorFlashError, NorFlashErrorKind};
+use embedded_storage::nor_flash::NorFlashErrorKind;
 use embedded_storage_async::nor_flash::NorFlash;
 
 use crate::crc::*;

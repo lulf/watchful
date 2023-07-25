@@ -7,20 +7,16 @@ use core::cell::RefCell;
 use defmt::{info, warn, Format};
 use display_interface_spi::SPIInterfaceNoCS;
 use embassy_boot_nrf::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig};
-use embassy_embedded_hal::flash::partition::Partition;
 use embassy_executor::{InterruptExecutor, Spawner};
-use embassy_futures::select::{select, Either};
-use embassy_futures::{block_on, yield_now};
+use embassy_futures::block_on;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::interrupt::{InterruptExt, Priority};
 use embassy_nrf::peripherals::{P0_18, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, interrupt, pac, peripherals, spim};
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
-use embassy_sync::channel::Channel;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_sync::signal::Signal;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::image::{Image, ImageRawLE};
 use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10};
@@ -33,13 +29,12 @@ use embedded_storage_async::nor_flash::NorFlash;
 //use embedded_text::alignment::HorizontalAlignment;
 use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
 use embedded_text::TextBox;
-use futures::{pin_mut, select_biased, FutureExt};
 use heapless::Vec;
 use mipidsi::models::ST7789;
 use nrf_dfu::prelude::*;
 use nrf_softdevice::ble::gatt_server::NotifyValueError;
-use nrf_softdevice::ble::{gatt_server, peripheral, Connection, DisconnectedError};
-use nrf_softdevice::{gatt_server, raw, Flash, Softdevice};
+use nrf_softdevice::ble::{gatt_server, peripheral, Connection};
+use nrf_softdevice::{raw, Flash, Softdevice};
 use static_cell::StaticCell;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
@@ -79,7 +74,7 @@ async fn main(s: Spawner) {
     interrupt::SWI0_EGU0.set_priority(Priority::P5);
     EXECUTOR_MED
         .start(interrupt::SWI0_EGU0)
-        .spawn(softdevice_soc_task(sd))
+        .spawn(softdevice_soc_task())
         .unwrap();
 
     s.spawn(softdevice_ble_task(sd)).unwrap();
@@ -453,7 +448,8 @@ fn enable_softdevice(name: &'static str) -> &'static mut Softdevice {
 }
 
 #[embassy_executor::task]
-async fn softdevice_soc_task(sd: &'static Softdevice) {
+async fn softdevice_soc_task() {
+    let sd = unsafe { Softdevice::steal() };
     sd.run_soc().await;
 }
 
