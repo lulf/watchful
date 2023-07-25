@@ -310,6 +310,7 @@ dependencies = [
  "embedded-io",
  "embedded-storage",
  "embedded-storage-async",
+ "heapless",
 ]
 
 [[package]]

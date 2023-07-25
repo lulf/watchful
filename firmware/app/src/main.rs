@@ -32,13 +32,12 @@ use embedded_graphics::primitives::Rectangle;
 //use embedded_text::alignment::HorizontalAlignment;
 use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
 use embedded_text::TextBox;
-use futures::{pin_mut, select_biased, FutureExt};
 use heapless::Vec;
 use mipidsi::models::ST7789;
 use nrf_dfu::prelude::*;
 use nrf_softdevice::ble::gatt_server::NotifyValueError;
-use nrf_softdevice::ble::{gatt_server, peripheral, Connection, DisconnectedError};
-use nrf_softdevice::{gatt_server, raw, Flash, Softdevice};
+use nrf_softdevice::ble::{gatt_server, peripheral, Connection};
+use nrf_softdevice::{raw, Flash, Softdevice};
 use static_cell::StaticCell;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
@@ -55,9 +54,13 @@ unsafe fn SWI0_EGU0() {
     EXECUTOR_MED.on_interrupt()
 }
 
+// Aligned to 4 bytes + 3 bytes for header
+const MTU: usize = 24;
+const ATT_MTU: usize = MTU + 3;
+
 type Part = Partition<'static, NoopRawMutex, Flash>;
-type Target = DfuTarget<ATT_MTU>;
-type Flasher = DfuFlasher<Part, Part, 1024>;
+type Target = DfuTarget<MTU>;
+type Flasher = DfuFlasher<MTU>;
 
 #[embassy_executor::main]
 async fn main(s: Spawner) {
@@ -95,7 +98,7 @@ async fn main(s: Spawner) {
 
     s.spawn(softdevice_task(sd)).unwrap();
 
-    static DFU_STATE: DfuState = DfuState::new();
+    static DFU_STATE: DfuState<MTU> = DfuState::new();
 
     // Configure flash access.
     static FLASH: StaticCell<Mutex<NoopRawMutex, Flash>> = StaticCell::new();
@@ -103,21 +106,25 @@ async fn main(s: Spawner) {
 
     // Reads the partitions config from the linkerfile and defines the needed partitions.
     let config = FirmwareUpdaterConfig::from_linkerfile(flash);
+    let dfu_size = config.dfu.size();
 
     // Run flasher task at higher priority to guarantee flow control
-    let flash = DfuFlash::new(config, &DFU_STATE);
+    let flash = DfuFlasher::new(&DFU_STATE);
     interrupt::SWI0_EGU0.set_priority(Priority::P5);
     EXECUTOR_MED
         .start(interrupt::SWI0_EGU0)
-        .spawn(flash_task(flash))
+        .spawn(flash_task(
+            flash,
+            FlashTaskConfig {
+                dfu: config.dfu,
+                state: config.state,
+            },
+        ))
         .unwrap();
 
     static TARGET: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Target>>> = StaticCell::new();
     let target = TARGET.init(Mutex::new(RefCell::new(Target::new(
-        config.dfu.size(),
-        fw_info,
-        hw_info,
-        &STATE,
+        dfu_size, fw_info, hw_info, &DFU_STATE,
     ))));
 
     s.spawn(advertiser_task(s, sd, server, target, "Pinetime Embassy"))
@@ -250,9 +257,6 @@ async fn display_time(display: &mut Display) {
     .unwrap();
 }
 
-// Aligned to 4 bytes + 3 bytes for header
-const ATT_MTU: usize = 27;
-
 #[nrf_softdevice::gatt_service(uuid = "FE59")]
 pub struct NrfDfuService {
     #[characteristic(uuid = "8EC90001-F315-4F60-9FB8-838830DAEA50", write, notify)]
@@ -338,9 +342,25 @@ impl PineTimeServer {
     }
 }
 
+pub struct FlashTaskConfig {
+    dfu: Part,
+    state: Part,
+}
+
+// To use it from separate executor. Is it sound?
+unsafe impl Send for FlashTaskConfig {}
+unsafe impl Sync for FlashTaskConfig {}
+
 #[embassy_executor::task(pool_size = "1")]
-pub async fn flash_task(mut flash: DfuFlash<Part, Part, 1024>) {
-    flash.run().await;
+pub async fn flash_task(mut flash: Flasher, config: FlashTaskConfig) {
+    match flash.run(config.dfu, config.state).await {
+        Ok(_) => {
+            cortex_m::peripheral::SCB::sys_reset();
+        }
+        Err(e) => {
+            panic!("Error during firmware update: {:?}", e);
+        }
+    }
 }
 
 #[embassy_executor::task(pool_size = "1")]
