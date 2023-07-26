@@ -2,6 +2,8 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
+use core::cell::RefCell;
+
 use defmt::{info, warn, Format};
 use display_interface_spi::SPIInterfaceNoCS;
 use embassy_boot_nrf::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig};
@@ -32,14 +34,12 @@ use heapless::Vec;
 use mipidsi::models::ST7789;
 use nrf_dfu::prelude::*;
 use nrf_softdevice::ble::gatt_server::NotifyValueError;
-use nrf_softdevice::ble::{gatt_server, peripheral, Connection};
+use nrf_softdevice::ble::{gatt_client, gatt_server, peripheral, Connection};
 use nrf_softdevice::{raw, Flash, Softdevice};
 use static_cell::StaticCell;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
 use {defmt_rtt as _, panic_probe as _};
-
-mod cts;
 
 bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
@@ -58,6 +58,9 @@ static EXECUTOR_SOC: InterruptExecutor = InterruptExecutor::new();
 unsafe fn SWI0_EGU0() {
     EXECUTOR_SOC.on_interrupt()
 }
+
+static CURRENT_TIME: Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>> =
+    Mutex::new(RefCell::new(time::PrimitiveDateTime::MIN));
 
 #[embassy_executor::main]
 async fn main(s: Spawner) {
@@ -82,7 +85,9 @@ async fn main(s: Spawner) {
     s.spawn(softdevice_ble_task(sd)).unwrap();
     s.spawn(watchdog_task()).unwrap();
 
-    s.spawn(advertiser_task(s, sd, server, flash, "Pinetime Embassy"))
+    static CURRENT_TIME: Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>> =
+        Mutex::new(RefCell::new(time::PrimitiveDateTime::MIN));
+    s.spawn(advertiser_task(s, sd, server, flash, &CURRENT_TIME, "Pinetime Embassy"))
         .unwrap();
 
     info!("Hello world");
@@ -162,7 +167,7 @@ async fn main(s: Spawner) {
             }
             WatchState::ViewTime => {
                 display.clear(Rgb::BLACK).unwrap();
-                display_time(&mut display).await;
+                display_time(&mut display, &CURRENT_TIME).await;
                 Timer::after(Duration::from_secs(5)).await;
                 state = WatchState::Idle;
             } /*  WatchState::ViewMenu => {
@@ -195,13 +200,20 @@ pub enum WatchState {
 type Display =
     mipidsi::Display<SPIInterfaceNoCS<Spim<'static, TWISPI0>, Output<'static, P0_18>>, ST7789, Output<'static, P0_26>>;
 
-async fn display_time(display: &mut Display) {
+async fn display_time(
+    display: &mut Display,
+    current_time: &Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>>,
+) {
     //mipidsi::Display<DI, MODEL, RST>) {
-    let text = "10:42";
+    let current_time = current_time.lock().await;
+    let current_time = current_time.borrow();
+    let mut text: heapless::String<16> = heapless::String::new();
+    use core::fmt::Write;
+    write!(text, "{:02}:{:02}", current_time.hour(), current_time.minute()).unwrap();
     let font = FontRenderer::new::<fonts::u8g2_font_spleen32x64_mu>();
 
     font.render_aligned(
-        text,
+        text.as_ref(),
         display.bounding_box().center() + Point::new(0, 0),
         VerticalPosition::Baseline,
         HorizontalAlignment::Center,
@@ -295,47 +307,40 @@ impl NrfDfuService {
 #[nrf_softdevice::gatt_server]
 pub struct PineTimeServer {
     dfu: NrfDfuService,
-    cts: CurrentTimeService,
 }
 
-#[nrf_softdevice::gatt_service(uuid = "1805")]
-pub struct CurrentTimeService {
-    #[characteristic(uuid = "00002a2b-0000-1000-8000-00805f9b34fb", write, read)]
+#[nrf_softdevice::gatt_client(uuid = "1805")]
+pub struct CurrentTimeServiceClient {
+    #[characteristic(uuid = "2a2b", write, read, notify)]
     current_time: Vec<u8, 10>,
 }
 
 type TimeKeeper = DynamicSender<'static, time::PrimitiveDateTime>;
 
-impl CurrentTimeService {
-    fn handle(&self, e: CurrentTimeServiceEvent, time_keeper: &mut TimeKeeper) {
-        match e {
-            CurrentTimeServiceEvent::CurrentTimeWrite(data) => {
-                if data.len() == 10 {
-                    let year = u16::from_le_bytes([data[0], data[1]]);
-                    let month = data[2];
-                    let day = data[3];
-                    let hour = data[4];
-                    let minute = data[5];
-                    let second = data[6];
-                    let _weekday = data[7];
-                    let micros_div = data[8];
+impl CurrentTimeServiceClient {
+    async fn get_time(&self) -> Result<time::PrimitiveDateTime, gatt_client::ReadError> {
+        let data = self.current_time_read().await?;
+        if data.len() == 10 {
+            let year = u16::from_le_bytes([data[0], data[1]]);
+            let month = data[2];
+            let day = data[3];
+            let hour = data[4];
+            let minute = data[5];
+            let second = data[6];
+            let _weekday = data[7];
+            let secs_frac = data[8];
 
-                    if let Ok(month) = month.try_into() {
-                        let date = time::Date::from_calendar_date(year as i32, month, day);
-                        let micros = 256 * 1000000 * micros_div as u32;
-                        let time = time::Time::from_hms_micro(hour, minute, second, micros);
-                        if let (Ok(time), Ok(date)) = (time, date) {
-                            let dt = time::PrimitiveDateTime::new(date, time);
-
-                            #[cfg(feature = "defmt")]
-                            info!("Setting time to {:?}", defmt::Debug2Format(&dt));
-
-                            let _ = time_keeper.try_send(dt);
-                        }
-                    }
+            if let Ok(month) = month.try_into() {
+                let date = time::Date::from_calendar_date(year as i32, month, day);
+                let micros = secs_frac as u32 * 1000000 / 256;
+                let time = time::Time::from_hms_micro(hour, minute, second, micros);
+                if let (Ok(time), Ok(date)) = (time, date) {
+                    let dt = time::PrimitiveDateTime::new(date, time);
+                    return Ok(dt);
                 }
             }
         }
+        Err(gatt_client::ReadError::Truncated)
     }
 }
 
@@ -344,16 +349,11 @@ impl PineTimeServer {
         &self,
         target: &mut Target,
         dfu: &mut DFU,
-        time_keeper: &mut TimeKeeper,
         conn: &mut DfuConnection,
         event: PineTimeServerEvent,
     ) -> Option<DfuStatus> {
         match event {
             PineTimeServerEvent::Dfu(event) => self.dfu.handle(target, dfu, conn, event),
-            PineTimeServerEvent::Cts(event) => {
-                self.cts.handle(event, time_keeper);
-                None
-            }
         }
     }
 }
@@ -399,17 +399,9 @@ pub async fn gatt_server_task(
         .await
         .expect("Failed to mark current firmware as good");
 
-    let dfu = updater
-        .prepare_update(&mut magic.0[..])
-        .await
-        .expect("Failed to prepare DFU partition");
-
-    static TIME_KEEPER: Channel<CriticalSectionRawMutex, time::PrimitiveDateTime, 1> = Channel::new();
-    let mut time_keeper = TIME_KEEPER.sender().into();
-
     let _ = gatt_server::run(&conn, server, |e| {
-        if let Some(DfuStatus::Done) = server.handle(&mut target, dfu, &mut time_keeper, &mut dfu_conn, e) {
-            let config = FirmwareUpdaterConfig::from_linkerfile(flash);
+        let mut config = FirmwareUpdaterConfig::from_linkerfile(flash);
+        if let Some(DfuStatus::Done) = server.handle(&mut target, &mut config.dfu, &mut dfu_conn, e) {
             let mut updater = FirmwareUpdater::new(config);
             match block_on(updater.mark_updated(&mut magic.0[..])) {
                 Ok(_) => {
@@ -432,6 +424,7 @@ pub async fn advertiser_task(
     sd: &'static Softdevice,
     server: &'static PineTimeServer,
     flash: &'static Mutex<NoopRawMutex, Flash>,
+    current_time: &'static Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>>,
     name: &'static str,
 ) {
     let mut adv_data: Vec<u8, 31> = Vec::new();
@@ -458,6 +451,21 @@ pub async fn advertiser_task(
         let conn = peripheral::advertise_connectable(sd, adv, &config).await.unwrap();
 
         info!("Connection established");
+        if let Ok(time_client) = gatt_client::discover::<CurrentTimeServiceClient>(&conn).await {
+            info!("Found time server on peer, synchronizing time");
+            match time_client.get_time().await {
+                Ok(time) => {
+                    info!("Got time from peer: {:?}", defmt::Debug2Format(&time));
+                    let current = current_time.lock().await;
+                    let mut current = current.borrow_mut();
+                    *current = time;
+                }
+                Err(e) => {
+                    info!("Error retrieving time: {:?}", e);
+                }
+            }
+        }
+
         if let Err(e) = spawner.spawn(gatt_server_task(conn, server, flash)) {
             defmt::info!("Error spawning gatt task: {:?}", e);
         }
