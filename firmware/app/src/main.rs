@@ -7,15 +7,17 @@ use core::cell::RefCell;
 use defmt::{info, warn, Format};
 use display_interface_spi::SPIInterfaceNoCS;
 use embassy_boot_nrf::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig};
+use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::{InterruptExecutor, Spawner};
 use embassy_futures::block_on;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::interrupt::{InterruptExt, Priority};
-use embassy_nrf::peripherals::{P0_18, P0_26, TWISPI0};
+use embassy_nrf::peripherals::{P0_18, P0_25, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, interrupt, pac, peripherals, spim};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::blocking_mutex::Mutex as BMutex;
 use embassy_sync::channel::{Channel, DynamicSender, Sender};
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Duration, Timer};
@@ -40,6 +42,8 @@ use static_cell::StaticCell;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
 use {defmt_rtt as _, panic_probe as _};
+
+use crate::my_display_interface::SPIDeviceInterface;
 
 bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
@@ -103,19 +107,29 @@ async fn main(s: Spawner) {
     let rst = Output::new(p.P0_26, Level::Low, OutputDrive::Standard);
 
     // Keep low while driving display
-    let _cs = Output::new(p.P0_25, Level::Low, OutputDrive::Standard);
+    let display_cs = Output::new(p.P0_25, Level::Low, OutputDrive::Standard);
 
     // Data/clock
     let dc = Output::new(p.P0_18, Level::Low, OutputDrive::Standard);
 
     // create a DisplayInterface from SPI and DC pin, with no manual CS control
-    let mut config = spim::Config::default();
-    config.frequency = spim::Frequency::M8;
-    config.mode = MODE_3;
+    let mut default_config = spim::Config::default();
+    default_config.frequency = spim::Frequency::M8;
+    default_config.mode = MODE_3;
 
-    let spim = spim::Spim::new_txonly(p.TWISPI0, Irqs, p.P0_02, p.P0_03, config);
+    //let spi: Spi<'_, _, Blocking> = Spi::new_blocking(p.SPI1, clk, mosi, miso, touch_config.clone());
+    //let spi_bus: Mutex<NoopRawMutex, _> = Mutex::new(RefCell::new(spi));
 
-    let di = display_interface_spi::SPIInterfaceNoCS::new(spim, dc);
+    let spim = spim::Spim::new_txonly(p.TWISPI0, Irqs, p.P0_02, p.P0_03, default_config);
+    static SPI_BUS: StaticCell<BMutex<NoopRawMutex, RefCell<Spim<'static, TWISPI0>>>> = StaticCell::new();
+    let spi_bus = SPI_BUS.init(BMutex::new(RefCell::new(spim)));
+
+    let mut display_config = spim::Config::default();
+    display_config.frequency = spim::Frequency::M8;
+    display_config.mode = MODE_3;
+    let display_spi = SpiDeviceWithConfig::new(spi_bus, display_cs, display_config);
+
+    let di = SPIDeviceInterface::new(display_spi, dc);
     // create the ILI9486 display driver from the display interface and optional RST pin
     let mut display = mipidsi::Builder::st7789(di)
         .with_display_size(240, 240)
@@ -197,8 +211,14 @@ pub enum WatchState {
     //  Workout,
 }
 
-type Display =
-    mipidsi::Display<SPIInterfaceNoCS<Spim<'static, TWISPI0>, Output<'static, P0_18>>, ST7789, Output<'static, P0_26>>;
+type Display = mipidsi::Display<
+    SPIDeviceInterface<
+        SpiDeviceWithConfig<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static, P0_25>>,
+        Output<'static, P0_18>,
+    >,
+    ST7789,
+    Output<'static, P0_26>,
+>;
 
 async fn display_time(
     display: &mut Display,
@@ -554,3 +574,138 @@ async fn exercise(signal: StopSignal, tracker: HealthTracker) {
     }
 }
 */
+
+mod my_display_interface {
+    use display_interface::{DataFormat, DisplayError, WriteOnlyDataCommand};
+    use embedded_hal::digital::OutputPin;
+    use embedded_hal::spi::SpiDevice;
+
+    /// SPI display interface.
+    ///
+    /// This combines the SPI peripheral and a data/command pin
+    pub struct SPIDeviceInterface<SPI, DC> {
+        spi: SPI,
+        dc: DC,
+    }
+
+    impl<SPI, DC> SPIDeviceInterface<SPI, DC>
+    where
+        SPI: SpiDevice,
+        DC: OutputPin,
+    {
+        /// Create new SPI interface for communciation with a display driver
+        pub fn new(spi: SPI, dc: DC) -> Self {
+            Self { spi, dc }
+        }
+    }
+
+    impl<SPI, DC> WriteOnlyDataCommand for SPIDeviceInterface<SPI, DC>
+    where
+        SPI: SpiDevice,
+        DC: OutputPin,
+    {
+        fn send_commands(&mut self, cmds: DataFormat<'_>) -> Result<(), DisplayError> {
+            // 1 = data, 0 = command
+            self.dc.set_low().map_err(|_| DisplayError::DCError)?;
+
+            send_u8(&mut self.spi, cmds).map_err(|_| DisplayError::BusWriteError)?;
+            Ok(())
+        }
+
+        fn send_data(&mut self, buf: DataFormat<'_>) -> Result<(), DisplayError> {
+            // 1 = data, 0 = command
+            self.dc.set_high().map_err(|_| DisplayError::DCError)?;
+
+            send_u8(&mut self.spi, buf).map_err(|_| DisplayError::BusWriteError)?;
+            Ok(())
+        }
+    }
+
+    fn send_u8<T: SpiDevice>(spi: &mut T, words: DataFormat<'_>) -> Result<(), T::Error> {
+        match words {
+            DataFormat::U8(slice) => spi.write(slice),
+            DataFormat::U16(slice) => {
+                use byte_slice_cast::*;
+                spi.write(slice.as_byte_slice())
+            }
+            DataFormat::U16LE(slice) => {
+                use byte_slice_cast::*;
+                for v in slice.as_mut() {
+                    *v = v.to_le();
+                }
+                spi.write(slice.as_byte_slice())
+            }
+            DataFormat::U16BE(slice) => {
+                use byte_slice_cast::*;
+                for v in slice.as_mut() {
+                    *v = v.to_be();
+                }
+                spi.write(slice.as_byte_slice())
+            }
+            DataFormat::U8Iter(iter) => {
+                let mut buf = [0; 32];
+                let mut i = 0;
+
+                for v in iter.into_iter() {
+                    buf[i] = v;
+                    i += 1;
+
+                    if i == buf.len() {
+                        spi.write(&buf)?;
+                        i = 0;
+                    }
+                }
+
+                if i > 0 {
+                    spi.write(&buf[..i])?;
+                }
+
+                Ok(())
+            }
+            DataFormat::U16LEIter(iter) => {
+                use byte_slice_cast::*;
+                let mut buf = [0; 32];
+                let mut i = 0;
+
+                for v in iter.map(u16::to_le) {
+                    buf[i] = v;
+                    i += 1;
+
+                    if i == buf.len() {
+                        spi.write(&buf.as_byte_slice())?;
+                        i = 0;
+                    }
+                }
+
+                if i > 0 {
+                    spi.write(&buf[..i].as_byte_slice())?;
+                }
+
+                Ok(())
+            }
+            DataFormat::U16BEIter(iter) => {
+                use byte_slice_cast::*;
+                let mut buf = [0; 64];
+                let mut i = 0;
+                let len = buf.len();
+
+                for v in iter.map(u16::to_be) {
+                    buf[i] = v;
+                    i += 1;
+
+                    if i == len {
+                        spi.write(&buf.as_byte_slice())?;
+                        i = 0;
+                    }
+                }
+
+                if i > 0 {
+                    spi.write(&buf[..i].as_byte_slice())?;
+                }
+
+                Ok(())
+            }
+            _ => unimplemented!(),
+        }
+    }
+}
