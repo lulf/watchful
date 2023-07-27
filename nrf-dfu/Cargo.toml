@@ -9,7 +9,6 @@ embassy-futures = { version = "0.1.0" }
 embassy-sync = { version = "0.2.0" }
 embassy-boot = { version = "0.1.0", features = ["nightly"] }
 embedded-io = "0.4.0"
-embedded-storage-async = "0.4.0"
 embedded-storage = "0.3.0"
 embedded-hal = "=1.0.0-alpha.11"
 embedded-hal-02 = { package = "embedded-hal", version = "0.2.6" }

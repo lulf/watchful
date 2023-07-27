@@ -1,0 +1,12 @@
+[package]
+name = "pinetime-flash"
+edition = "2021"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+embedded-hal = "=1.0.0-alpha.11"
+embedded-storage = "0.3.0"
+defmt = { version = "0.3", optional = true }
+log = { version = "0.4", optional = true }
+bitflags = "2.3.3"

@@ -1,7 +1,5 @@
 use embassy_boot::{AlignedBuffer, FirmwareUpdaterError};
-use embassy_futures::block_on;
-use embedded_storage::nor_flash::NorFlashErrorKind;
-use embedded_storage_async::nor_flash::NorFlash;
+use embedded_storage::nor_flash::{NorFlash, NorFlashErrorKind};
 
 use crate::crc::*;
 
@@ -26,6 +24,7 @@ pub struct DfuTarget<const MTU: usize> {
     hw_info: HardwareInfo,
 
     buffer: AlignedBuffer<MTU>,
+    boffset: usize,
 }
 
 pub enum DfuStatus {
@@ -204,6 +203,7 @@ impl<const MTU: usize> DfuTarget<MTU> {
             hw_info,
 
             buffer: AlignedBuffer([0; MTU]),
+            boffset: 0,
         }
     }
 
@@ -247,10 +247,11 @@ impl<const MTU: usize> DfuTarget<MTU> {
                     if let ObjectType::Data = obj_type {
                         let size = self.objects[self.current].size;
                         let to = size + (DFU::ERASE_SIZE as u32 - size % DFU::ERASE_SIZE as u32);
-                        match block_on(dfu.erase(0, to as u32)) {
+                        match dfu.erase(0, to as u32) {
                             Ok(_) => {
                                 info!("Erase operation complete");
                                 self.objects[self.current].offset = 0;
+                                self.boffset = 0;
                             }
                             Err(e) => {
                                 #[cfg(feature = "defmt")]
@@ -283,6 +284,17 @@ impl<const MTU: usize> DfuTarget<MTU> {
                     )
                 } else {
                     if let ObjectType::Data = obj.obj_type {
+                        // Flush remaining data
+                        if self.boffset > 0 {
+                            // Write at previous boundary which was left in memory.
+                            if let Err(e) = dfu.write(obj.offset - self.boffset as u32, &self.buffer.0) {
+                                #[cfg(feature = "defmt")]
+                                let e = defmt::Debug2Format(&e);
+                                warn!("Write Error: {:?}", e);
+                                return (DfuResponse::new(request, DfuResult::OpFailed), DfuStatus::InProgress);
+                            }
+                            self.boffset = 0;
+                        }
                         info!("Verifying firmware integrity");
                         let mut check = Crc32::init();
                         let mut buf = [0; 32];
@@ -290,7 +302,7 @@ impl<const MTU: usize> DfuTarget<MTU> {
                         let size = obj.size;
                         while offset < size {
                             let to_read = core::cmp::min(buf.len(), (size - offset) as usize);
-                            match block_on(dfu.read(offset, &mut buf[..to_read])) {
+                            match dfu.read(offset, &mut buf[..to_read]) {
                                 Ok(_) => {
                                     check.add(&buf[..to_read]);
                                     offset += to_read as u32;
@@ -348,15 +360,18 @@ impl<const MTU: usize> DfuTarget<MTU> {
                 if let ObjectType::Data = obj.obj_type {
                     let mut pos = 0;
                     while pos < data.len() {
-                        let to_copy = core::cmp::min(data.len() - pos, self.buffer.0.len());
+                        let to_copy = core::cmp::min(data.len() - pos, self.buffer.0.len() - self.boffset);
                         // info!("Copying {} bytes to internal buffer", to_copy);
-                        self.buffer.0[..to_copy].copy_from_slice(&data[pos..pos + to_copy]);
+                        self.buffer.0[self.boffset..self.boffset + to_copy].copy_from_slice(&data[pos..pos + to_copy]);
 
-                        if let Err(e) = block_on(dfu.write(obj.offset + pos as u32, &self.buffer.0[..to_copy])) {
-                            #[cfg(feature = "defmt")]
-                            let e = defmt::Debug2Format(&e);
-                            warn!("Write Error: {:?}", e);
-                            return (DfuResponse::new(request, DfuResult::OpFailed), DfuStatus::InProgress);
+                        if self.boffset == self.buffer.0.len() {
+                            if let Err(e) = dfu.write(obj.offset + pos as u32, &self.buffer.0) {
+                                #[cfg(feature = "defmt")]
+                                let e = defmt::Debug2Format(&e);
+                                warn!("Write Error: {:?}", e);
+                                return (DfuResponse::new(request, DfuResult::OpFailed), DfuStatus::InProgress);
+                            }
+                            self.boffset = 0;
                         }
                         pos += to_copy;
                         // info!("Wrote {} bytes to flash (total {})", to_copy, self.offset);

@@ -5,17 +5,16 @@
 use core::cell::RefCell;
 
 use defmt::{info, warn, Format};
-use display_interface_spi::SPIInterfaceNoCS;
-use embassy_boot_nrf::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig};
-use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
-use embassy_executor::{InterruptExecutor, Spawner};
+use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareUpdater as FirmwareUpdater, FirmwareUpdaterConfig};
+use embassy_embedded_hal::shared_bus::blocking::spi::{SpiDevice, SpiDeviceWithConfig};
+use embassy_executor::Spawner;
 use embassy_futures::block_on;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
-use embassy_nrf::interrupt::{InterruptExt, Priority};
-use embassy_nrf::peripherals::{P0_18, P0_25, P0_26, TWISPI0};
+use embassy_nrf::interrupt::Priority;
+use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
-use embassy_nrf::{bind_interrupts, interrupt, pac, peripherals, spim};
+use embassy_nrf::{bind_interrupts, pac, peripherals, spim};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::blocking_mutex::Mutex as BMutex;
 use embassy_sync::channel::{Channel, DynamicSender, Sender};
@@ -28,7 +27,7 @@ use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::{BinaryColor, Rgb565 as Rgb};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
-use embedded_storage_async::nor_flash::NorFlash;
+use embedded_storage::nor_flash::NorFlash;
 //use embedded_text::alignment::HorizontalAlignment;
 use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
 use embedded_text::TextBox;
@@ -37,7 +36,8 @@ use mipidsi::models::ST7789;
 use nrf_dfu::prelude::*;
 use nrf_softdevice::ble::gatt_server::NotifyValueError;
 use nrf_softdevice::ble::{gatt_client, gatt_server, peripheral, Connection};
-use nrf_softdevice::{raw, Flash, Softdevice};
+use nrf_softdevice::{raw, Softdevice};
+use pinetime_flash::XtFlash;
 use static_cell::StaticCell;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
@@ -53,18 +53,20 @@ const MTU: usize = 120;
 // Aligned to 4 bytes + 3 bytes for header
 const ATT_MTU: usize = MTU + 3;
 
-type Target = DfuTarget<MTU>;
-
-// Executor for processing soc events from softdevice at a higher priority.
-static EXECUTOR_SOC: InterruptExecutor = InterruptExecutor::new();
-
-#[interrupt]
-unsafe fn SWI0_EGU0() {
-    EXECUTOR_SOC.on_interrupt()
-}
+type Target = DfuTarget<256>;
 
 static CURRENT_TIME: Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>> =
     Mutex::new(RefCell::new(time::PrimitiveDateTime::MIN));
+
+type Flash = XtFlash<SpiDevice<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static, P0_05>>>;
+type Display = mipidsi::Display<
+    SPIDeviceInterface<
+        SpiDevice<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static, P0_25>>,
+        Output<'static, P0_18>,
+    >,
+    ST7789,
+    Output<'static, P0_26>,
+>;
 
 #[embassy_executor::main]
 async fn main(s: Spawner) {
@@ -74,25 +76,12 @@ async fn main(s: Spawner) {
     let p = embassy_nrf::init(config);
 
     let sd = enable_softdevice("Pinetime Embassy");
-    static FLASH: StaticCell<Mutex<NoopRawMutex, Flash>> = StaticCell::new();
-    let flash = FLASH.init(Mutex::new(Flash::take(sd)));
 
     static GATT: StaticCell<PineTimeServer> = StaticCell::new();
     let server = GATT.init(PineTimeServer::new(sd).unwrap());
 
-    interrupt::SWI0_EGU0.set_priority(Priority::P5);
-    EXECUTOR_SOC
-        .start(interrupt::SWI0_EGU0)
-        .spawn(softdevice_soc_task())
-        .unwrap();
-
-    s.spawn(softdevice_ble_task(sd)).unwrap();
+    s.spawn(softdevice_task(sd)).unwrap();
     s.spawn(watchdog_task()).unwrap();
-
-    static CURRENT_TIME: Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>> =
-        Mutex::new(RefCell::new(time::PrimitiveDateTime::MIN));
-    s.spawn(advertiser_task(s, sd, server, flash, &CURRENT_TIME, "Pinetime Embassy"))
-        .unwrap();
 
     info!("Hello world");
     // Button enable
@@ -107,27 +96,29 @@ async fn main(s: Spawner) {
     let rst = Output::new(p.P0_26, Level::Low, OutputDrive::Standard);
 
     // Keep low while driving display
-    let display_cs = Output::new(p.P0_25, Level::Low, OutputDrive::Standard);
+    let display_cs = Output::new(p.P0_25, Level::High, OutputDrive::Standard);
 
     // Data/clock
     let dc = Output::new(p.P0_18, Level::Low, OutputDrive::Standard);
 
-    // create a DisplayInterface from SPI and DC pin, with no manual CS control
     let mut default_config = spim::Config::default();
     default_config.frequency = spim::Frequency::M8;
     default_config.mode = MODE_3;
 
-    //let spi: Spi<'_, _, Blocking> = Spi::new_blocking(p.SPI1, clk, mosi, miso, touch_config.clone());
-    //let spi_bus: Mutex<NoopRawMutex, _> = Mutex::new(RefCell::new(spi));
-
-    let spim = spim::Spim::new_txonly(p.TWISPI0, Irqs, p.P0_02, p.P0_03, default_config);
+    let spim = spim::Spim::new(p.TWISPI0, Irqs, p.P0_02, p.P0_04, p.P0_03, default_config);
     static SPI_BUS: StaticCell<BMutex<NoopRawMutex, RefCell<Spim<'static, TWISPI0>>>> = StaticCell::new();
     let spi_bus = SPI_BUS.init(BMutex::new(RefCell::new(spim)));
 
-    let mut display_config = spim::Config::default();
-    display_config.frequency = spim::Frequency::M8;
-    display_config.mode = MODE_3;
-    let display_spi = SpiDeviceWithConfig::new(spi_bus, display_cs, display_config);
+    // Create a DisplayInterface from SPI and DC pin.
+    let display_spi = SpiDevice::new(spi_bus, display_cs);
+
+    // Create flash device
+    let flash_cs = Output::new(p.P0_05, Level::High, OutputDrive::Standard);
+    let flash_spi = SpiDevice::new(spi_bus, flash_cs);
+
+    let xt_flash = XtFlash::new(flash_spi).unwrap();
+    static FLASH: StaticCell<BMutex<NoopRawMutex, RefCell<Flash>>> = StaticCell::new();
+    let flash = FLASH.init(BMutex::new(RefCell::new(xt_flash)));
 
     let di = SPIDeviceInterface::new(display_spi, dc);
     // create the ILI9486 display driver from the display interface and optional RST pin
@@ -137,6 +128,11 @@ async fn main(s: Spawner) {
         .unwrap();
 
     display.set_orientation(mipidsi::Orientation::Portrait(false)).unwrap();
+
+    static CURRENT_TIME: Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>> =
+        Mutex::new(RefCell::new(time::PrimitiveDateTime::MIN));
+    s.spawn(advertiser_task(s, sd, server, flash, &CURRENT_TIME, "Pinetime Embassy"))
+        .unwrap();
 
     /*
     let raw_image_data = ImageRawLE::new(include_bytes!("../assets/ferris.raw"), 86);
@@ -210,15 +206,6 @@ pub enum WatchState {
     //  FindPhone,
     //  Workout,
 }
-
-type Display = mipidsi::Display<
-    SPIDeviceInterface<
-        SpiDeviceWithConfig<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static, P0_25>>,
-        Output<'static, P0_18>,
-    >,
-    ST7789,
-    Output<'static, P0_26>,
->;
 
 async fn display_time(
     display: &mut Display,
@@ -382,7 +369,7 @@ impl PineTimeServer {
 pub async fn gatt_server_task(
     conn: Connection,
     server: &'static PineTimeServer,
-    flash: &'static Mutex<NoopRawMutex, Flash>,
+    flash: &'static BMutex<NoopRawMutex, RefCell<Flash>>,
 ) {
     let p = unsafe { pac::Peripherals::steal() };
     let part = p.FICR.info.part.read().part().bits();
@@ -410,20 +397,19 @@ pub async fn gatt_server_task(
     };
 
     info!("Running GATT server");
-    let config = FirmwareUpdaterConfig::from_linkerfile(flash);
+    let config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
     let mut target = DfuTarget::new(config.dfu.size(), fw_info, hw_info);
-    let mut magic = AlignedBuffer([0; 4]);
+    let mut magic = AlignedBuffer([0; 1]);
     let mut updater = FirmwareUpdater::new(config);
     updater
         .mark_booted(&mut magic.0[..])
-        .await
         .expect("Failed to mark current firmware as good");
 
     let _ = gatt_server::run(&conn, server, |e| {
-        let mut config = FirmwareUpdaterConfig::from_linkerfile(flash);
+        let mut config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
         if let Some(DfuStatus::Done) = server.handle(&mut target, &mut config.dfu, &mut dfu_conn, e) {
             let mut updater = FirmwareUpdater::new(config);
-            match block_on(updater.mark_updated(&mut magic.0[..])) {
+            match updater.mark_updated(&mut magic.0[..]) {
                 Ok(_) => {
                     info!("Firmware updated, resetting");
                     cortex_m::peripheral::SCB::sys_reset();
@@ -443,7 +429,7 @@ pub async fn advertiser_task(
     spawner: Spawner,
     sd: &'static Softdevice,
     server: &'static PineTimeServer,
-    flash: &'static Mutex<NoopRawMutex, Flash>,
+    flash: &'static BMutex<NoopRawMutex, RefCell<Flash>>,
     current_time: &'static Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>>,
     name: &'static str,
 ) {
@@ -528,14 +514,8 @@ fn enable_softdevice(name: &'static str) -> &'static mut Softdevice {
 }
 
 #[embassy_executor::task]
-async fn softdevice_soc_task() {
-    let sd = unsafe { Softdevice::steal() };
-    sd.run_soc().await;
-}
-
-#[embassy_executor::task]
-async fn softdevice_ble_task(sd: &'static Softdevice) {
-    sd.run_ble().await;
+async fn softdevice_task(sd: &'static Softdevice) {
+    sd.run().await;
 }
 
 // Keeps our system alive
