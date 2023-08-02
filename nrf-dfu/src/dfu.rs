@@ -23,10 +23,13 @@ pub struct DfuTarget<const MTU: usize> {
     fw_info: FirmwareInfo,
     hw_info: HardwareInfo,
 
-    buffer: AlignedBuffer<MTU>,
+    buffer: [u8; MTU],
+    offset: usize,
     boffset: usize,
 }
 
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum DfuStatus {
     InProgress,
     Done,
@@ -202,8 +205,9 @@ impl<const MTU: usize> DfuTarget<MTU> {
             fw_info,
             hw_info,
 
-            buffer: AlignedBuffer([0; MTU]),
+            buffer: [0; MTU],
             boffset: 0,
+            offset: 0,
         }
     }
 
@@ -249,9 +253,10 @@ impl<const MTU: usize> DfuTarget<MTU> {
                         let to = size + (DFU::ERASE_SIZE as u32 - size % DFU::ERASE_SIZE as u32);
                         match dfu.erase(0, to as u32) {
                             Ok(_) => {
-                                info!("Erase operation complete");
+                                info!("Erase operation 0 - {} complete", to);
                                 self.objects[self.current].offset = 0;
                                 self.boffset = 0;
+                                self.offset = 0;
                             }
                             Err(e) => {
                                 #[cfg(feature = "defmt")]
@@ -286,24 +291,28 @@ impl<const MTU: usize> DfuTarget<MTU> {
                     if let ObjectType::Data = obj.obj_type {
                         // Flush remaining data
                         if self.boffset > 0 {
+                            let mut buf = AlignedBuffer([0; MTU]);
+                            buf.as_mut()[..self.boffset].copy_from_slice(&self.buffer[..self.boffset]);
                             // Write at previous boundary which was left in memory.
-                            if let Err(e) = dfu.write(obj.offset - self.boffset as u32, &self.buffer.0) {
+                            if let Err(e) = dfu.write(self.offset as u32, &buf.0) {
                                 #[cfg(feature = "defmt")]
                                 let e = defmt::Debug2Format(&e);
                                 warn!("Write Error: {:?}", e);
                                 return (DfuResponse::new(request, DfuResult::OpFailed), DfuStatus::InProgress);
                             }
+                            self.offset += self.boffset;
                             self.boffset = 0;
                         }
                         info!("Verifying firmware integrity");
                         let mut check = Crc32::init();
-                        let mut buf = [0; 32];
+                        let mut buf = [0; MTU];
                         let mut offset: u32 = 0;
                         let size = obj.size;
                         while offset < size {
                             let to_read = core::cmp::min(buf.len(), (size - offset) as usize);
                             match dfu.read(offset, &mut buf[..to_read]) {
                                 Ok(_) => {
+                                    info!("Read {} bytes: {:x}", to_read, &buf[..to_read]);
                                     check.add(&buf[..to_read]);
                                     offset += to_read as u32;
                                 }
@@ -360,18 +369,30 @@ impl<const MTU: usize> DfuTarget<MTU> {
                 if let ObjectType::Data = obj.obj_type {
                     let mut pos = 0;
                     while pos < data.len() {
-                        let to_copy = core::cmp::min(data.len() - pos, self.buffer.0.len() - self.boffset);
-                        // info!("Copying {} bytes to internal buffer", to_copy);
-                        self.buffer.0[self.boffset..self.boffset + to_copy].copy_from_slice(&data[pos..pos + to_copy]);
+                        let to_copy = core::cmp::min(data.len() - pos, self.buffer.len() - self.boffset);
+                        //info!("Copying {} bytes to internal buffer", to_copy);
+                        self.buffer[self.boffset..self.boffset + to_copy].copy_from_slice(&data[pos..pos + to_copy]);
 
-                        if self.boffset == self.buffer.0.len() {
-                            if let Err(e) = dfu.write(obj.offset + pos as u32, &self.buffer.0) {
+                        if self.boffset == self.buffer.len() {
+                            let mut buf = AlignedBuffer([0; MTU]);
+                            buf.as_mut()[..].copy_from_slice(&self.buffer[..]);
+                            info!("Flushing buffer to offset {}: {:x}", self.offset, &buf.0[..]);
+                            if let Err(e) = dfu.write(self.offset as u32, &buf.0) {
                                 #[cfg(feature = "defmt")]
                                 let e = defmt::Debug2Format(&e);
                                 warn!("Write Error: {:?}", e);
                                 return (DfuResponse::new(request, DfuResult::OpFailed), DfuStatus::InProgress);
                             }
+
+                            /*
+                            dfu.read(self.offset as u32, &mut self.read_buffer.0).unwrap();
+                            assert_eq!(&self.read_buffer.0, &self.buffer.0);
+                            */
+
+                            self.offset += self.boffset;
                             self.boffset = 0;
+                        } else {
+                            self.boffset += to_copy;
                         }
                         pos += to_copy;
                         // info!("Wrote {} bytes to flash (total {})", to_copy, self.offset);
@@ -427,6 +448,8 @@ impl<const MTU: usize> DfuTarget<MTU> {
                 self.objects[1].crc.reset();
                 self.objects[1].offset = 0;
                 self.receipt_count = 0;
+                self.boffset = 0;
+                self.offset = 0;
                 (DfuResponse::new(request, DfuResult::Success), DfuStatus::InProgress)
             }
         }
@@ -754,5 +777,164 @@ impl<'m> WriteBuf<'m> {
 
     fn slice(&mut self) -> &mut [u8] {
         &mut self.data[self.pos..]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_update_protocol() {
+        let mut test_flash: MemFlash<65536, 4096, 1> = MemFlash::new(0);
+        let firmware = [13; 12345];
+        let mut crc = Crc32::init();
+        crc.add(&firmware);
+        let expected_crc = crc.finish();
+
+        let mut target: DfuTarget<256> = DfuTarget::new(
+            65536,
+            FirmwareInfo {
+                ftype: FirmwareType::Application,
+                version: 0,
+                addr: 0,
+                len: 0,
+            },
+            HardwareInfo {
+                part: 0,
+                variant: 0,
+                rom_size: 0,
+                ram_size: 0,
+                rom_page_size: 0,
+            },
+        );
+
+        let response = target.process(
+            DfuRequest::Create {
+                obj_type: ObjectType::Data,
+                obj_size: firmware.len() as u32,
+            },
+            &mut test_flash,
+        );
+
+        assert_eq!(DfuResult::Success, response.0.result);
+        assert_eq!(DfuStatus::InProgress, response.1);
+        assert_eq!(&[0xff; 12345], &test_flash.mem[0..12345]);
+
+        for chunk in firmware.chunks(120) {
+            let response = target.process(DfuRequest::Write { data: chunk }, &mut test_flash);
+            assert_eq!(DfuResult::Success, response.0.result);
+            assert_eq!(DfuStatus::InProgress, response.1);
+        }
+
+        let response = target.process(DfuRequest::Crc, &mut test_flash);
+        assert_eq!(DfuResult::Success, response.0.result);
+        assert_eq!(DfuStatus::InProgress, response.1);
+        let body = response.0.body.unwrap();
+
+        if let Some(DfuResponseBody::Crc { offset, crc }) = response.0.body {
+            assert_eq!(expected_crc, crc);
+            assert_eq!(12345, offset);
+        } else {
+            panic!("Unexpected DFU response body: {:?}", body);
+        }
+
+        let response = target.process(DfuRequest::Execute, &mut test_flash);
+        assert_eq!(DfuResult::Success, response.0.result);
+        assert_eq!(DfuStatus::Done, response.1);
+        assert_eq!(&test_flash.mem[0..12345], firmware);
+    }
+
+    use alloc::vec::Vec;
+
+    use embedded_storage::nor_flash::{ErrorType, NorFlash, ReadNorFlash};
+
+    extern crate alloc;
+
+    pub(crate) struct MemFlash<const SIZE: usize, const ERASE_SIZE: usize, const WRITE_SIZE: usize> {
+        pub mem: [u8; SIZE],
+        pub writes: Vec<(u32, usize)>,
+        pub erases: Vec<(u32, u32)>,
+    }
+
+    impl<const SIZE: usize, const ERASE_SIZE: usize, const WRITE_SIZE: usize> MemFlash<SIZE, ERASE_SIZE, WRITE_SIZE> {
+        #[allow(unused)]
+        pub const fn new(fill: u8) -> Self {
+            Self {
+                mem: [fill; SIZE],
+                writes: Vec::new(),
+                erases: Vec::new(),
+            }
+        }
+
+        fn read(&mut self, offset: u32, bytes: &mut [u8]) {
+            let len = bytes.len();
+            bytes.copy_from_slice(&self.mem[offset as usize..offset as usize + len]);
+        }
+
+        fn write(&mut self, offset: u32, bytes: &[u8]) {
+            self.writes.push((offset, bytes.len()));
+            let offset = offset as usize;
+            assert_eq!(0, bytes.len() % WRITE_SIZE);
+            assert_eq!(0, offset % WRITE_SIZE);
+            assert!(offset + bytes.len() <= SIZE);
+
+            self.mem[offset..offset + bytes.len()].copy_from_slice(bytes);
+        }
+
+        fn erase(&mut self, from: u32, to: u32) {
+            self.erases.push((from, to));
+            let from = from as usize;
+            let to = to as usize;
+            assert_eq!(0, from % ERASE_SIZE);
+            assert_eq!(0, to % ERASE_SIZE);
+            self.mem[from..to].fill(0xff);
+        }
+    }
+
+    impl<const SIZE: usize, const ERASE_SIZE: usize, const WRITE_SIZE: usize> Default
+        for MemFlash<SIZE, ERASE_SIZE, WRITE_SIZE>
+    {
+        fn default() -> Self {
+            Self::new(0xff)
+        }
+    }
+
+    impl<const SIZE: usize, const ERASE_SIZE: usize, const WRITE_SIZE: usize> ErrorType
+        for MemFlash<SIZE, ERASE_SIZE, WRITE_SIZE>
+    {
+        type Error = core::convert::Infallible;
+    }
+
+    impl<const SIZE: usize, const ERASE_SIZE: usize, const WRITE_SIZE: usize> ReadNorFlash
+        for MemFlash<SIZE, ERASE_SIZE, WRITE_SIZE>
+    {
+        const READ_SIZE: usize = 1;
+
+        fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+            self.read(offset, bytes);
+            Ok(())
+        }
+
+        fn capacity(&self) -> usize {
+            SIZE
+        }
+    }
+
+    impl<const SIZE: usize, const ERASE_SIZE: usize, const WRITE_SIZE: usize> NorFlash
+        for MemFlash<SIZE, ERASE_SIZE, WRITE_SIZE>
+    {
+        const WRITE_SIZE: usize = WRITE_SIZE;
+        const ERASE_SIZE: usize = ERASE_SIZE;
+
+        fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+            self.write(offset, bytes);
+            Ok(())
+        }
+
+        fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
+            self.erase(from, to);
+            Ok(())
+        }
     }
 }
