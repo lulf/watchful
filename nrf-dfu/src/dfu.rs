@@ -253,7 +253,6 @@ impl<const MTU: usize> DfuTarget<MTU> {
                         let to = size + (DFU::ERASE_SIZE as u32 - size % DFU::ERASE_SIZE as u32);
                         match dfu.erase(0, to as u32) {
                             Ok(_) => {
-                                info!("Erase operation 0 - {} complete", to);
                                 self.objects[self.current].offset = 0;
                                 self.boffset = 0;
                                 self.offset = 0;
@@ -310,7 +309,6 @@ impl<const MTU: usize> DfuTarget<MTU> {
                             let to_read = core::cmp::min(buf.len(), (size - offset) as usize);
                             match dfu.read(offset, &mut buf[..to_read]) {
                                 Ok(_) => {
-                                    info!("Read {} bytes: {:x}", to_read, &buf[..to_read]);
                                     check.add(&buf[..to_read]);
                                     offset += to_read as u32;
                                 }
