@@ -4,10 +4,8 @@
 use core::cell::RefCell;
 
 use cortex_m_rt::{entry, exception};
-
 #[cfg(feature = "defmt")]
 use defmt_rtt as _;
-
 use embassy_boot_nrf::*;
 use embassy_nrf::nvmc::Nvmc;
 use embassy_nrf::wdt;
@@ -30,7 +28,8 @@ fn main() -> ! {
     wdt_config.run_during_sleep = true;
     wdt_config.run_during_debug_halt = false;
 
-    let flash = WatchdogFlash::start(Nvmc::new(p.NVMC), p.WDT, wdt_config);
+    //let flash = WatchdogFlash::start(Nvmc::new(p.NVMC), p.WDT, wdt_config);
+    let flash = Nvmc::new(p.NVMC);
     let flash = Mutex::new(RefCell::new(flash));
 
     let config = BootLoaderConfig::from_linkerfile_blocking(&flash);

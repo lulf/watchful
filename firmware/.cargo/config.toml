@@ -1,5 +1,6 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 # replace nRF82832_xxAA with your chip as listed in `probe-rs-cli chip list`
+#runner = "probe-rs-cli run --no-location --chip nRF52832_xxAA"
 runner = "probe-run --chip nRF52832_xxAA"
 
 [build]

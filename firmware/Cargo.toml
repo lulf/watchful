@@ -31,3 +31,6 @@ embassy-futures = {path = "../../embassy/embassy-futures"}
 nrf-softdevice = { path = "../../nrf-softdevice/nrf-softdevice"}
 nrf-softdevice-mbr = { path = "../../nrf-softdevice/nrf-softdevice-mbr"}
 nrf-softdevice-s132 = { path = "../../nrf-softdevice/nrf-softdevice-s132"}
+
+[profile.release]
+debug = 2

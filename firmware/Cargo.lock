@@ -373,7 +373,7 @@ name = "embassy-futures"
 version = "0.1.0"
 
 [[package]]
-name = "embassy-hal-common"
+name = "embassy-hal-internal"
 version = "0.1.0"
 dependencies = [
  "cortex-m",
@@ -401,7 +401,7 @@ dependencies = [
  "critical-section",
  "defmt",
  "embassy-embedded-hal",
- "embassy-hal-common",
+ "embassy-hal-internal",
  "embassy-sync",
  "embassy-time",
  "embassy-usb-driver",

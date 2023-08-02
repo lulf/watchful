@@ -116,18 +116,42 @@ async fn main(s: Spawner) {
     let flash_cs = Output::new(p.P0_05, Level::High, OutputDrive::Standard);
     let flash_spi = SpiDevice::new(spi_bus, flash_cs);
 
-    let xt_flash = XtFlash::new(flash_spi).unwrap();
+    let mut xt_flash = XtFlash::new(flash_spi).unwrap();
+    xt_flash.erase(0, 8192).unwrap();
+    let mut rd = [0xff; 256];
+    for chunk in (0..8192).step_by(256) {
+        xt_flash.read(chunk, &mut rd[..]).unwrap();
+        info!("Read erased data from {} data: {:x}", chunk, rd);
+        assert_eq!(&rd[..], &[0xff; 256]);
+    }
+
+    let mut buf = [0; 4];
+    for chunk in (0..512).step_by(4) {
+        buf = [(chunk as usize % 255) as u8; 4];
+        xt_flash.write(chunk as u32, &buf[..]).unwrap();
+        info!("Write data to {} data: {:x}", chunk, buf);
+        Timer::after(Duration::from_millis(100)).await;
+    }
+
+    Timer::after(Duration::from_millis(1000)).await;
+
+    for chunk in (0..512).step_by(256) {
+        let buf = [(chunk as usize % 255) as u8; 256];
+        xt_flash.read(chunk, &mut rd[..]).unwrap();
+        info!("Read written data from {} data: {:x}", chunk, rd);
+        assert_eq!(&rd[..], &buf[..]);
+    }
+
+    /*
+    xt_flash.write(256, &[4, 3, 2, 1]).unwrap();
+    let mut rd = [0; 4];
+    xt_flash.read(256, &mut rd[..]).unwrap();
+    info!("Data: {:x}", rd);
+    assert_eq!(&rd[..], &[4, 3, 2, 1]);
+    */
+
     static FLASH: StaticCell<BMutex<NoopRawMutex, RefCell<Flash>>> = StaticCell::new();
     let flash = FLASH.init(BMutex::new(RefCell::new(xt_flash)));
-
-    let di = SPIDeviceInterface::new(display_spi, dc);
-    // create the ILI9486 display driver from the display interface and optional RST pin
-    let mut display = mipidsi::Builder::st7789(di)
-        .with_display_size(240, 240)
-        .init(&mut Delay, Some(rst))
-        .unwrap();
-
-    display.set_orientation(mipidsi::Orientation::Portrait(false)).unwrap();
 
     static CURRENT_TIME: Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>> =
         Mutex::new(RefCell::new(time::PrimitiveDateTime::MIN));
@@ -158,6 +182,21 @@ async fn main(s: Spawner) {
     text_box.draw(&mut display).unwrap();
     */
     //let font = FontRenderer::new::<fonts::u8g2_font_haxrcorp4089_t_cyrillic>();
+    //
+    loop {
+        Timer::after(Duration::from_secs(1)).await;
+    }
+
+    /*
+    let di = SPIDeviceInterface::new(display_spi, dc);
+    // create the ILI9486 display driver from the display interface and optional RST pin
+    let mut display = mipidsi::Builder::st7789(di)
+        .with_display_size(240, 240)
+        .init(&mut Delay, Some(rst))
+        .unwrap();
+
+    display.set_orientation(mipidsi::Orientation::Portrait(false)).unwrap();
+
 
     let mut state = WatchState::Idle;
     loop {
@@ -197,6 +236,7 @@ async fn main(s: Spawner) {
         }
         // Main is the 'idle task'
     }
+    */
 }
 
 pub enum WatchState {
@@ -397,17 +437,19 @@ pub async fn gatt_server_task(
     };
 
     info!("Running GATT server");
-    let config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
+    let mut config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
     let mut target = DfuTarget::new(config.dfu.size(), fw_info, hw_info);
     let mut magic = AlignedBuffer([0; 1]);
-    let mut updater = FirmwareUpdater::new(config);
+    //let mut updater = FirmwareUpdater::new(config);
+    /*
     updater
         .mark_booted(&mut magic.0[..])
-        .expect("Failed to mark current firmware as good");
+        .expect("Failed to mark current firmware as good");*/
 
     let _ = gatt_server::run(&conn, server, |e| {
-        let mut config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
+        //let mut config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
         if let Some(DfuStatus::Done) = server.handle(&mut target, &mut config.dfu, &mut dfu_conn, e) {
+            /*
             let mut updater = FirmwareUpdater::new(config);
             match updater.mark_updated(&mut magic.0[..]) {
                 Ok(_) => {
@@ -417,7 +459,7 @@ pub async fn gatt_server_task(
                 Err(e) => {
                     panic!("Error marking firmware updated: {:?}", e);
                 }
-            }
+            }*/
         }
     })
     .await;
