@@ -2,12 +2,16 @@
 
 Firmware for Pinetime based on [Embassy](https://embassy.dev).
 
+DONE:
+
+* [x] Implement Nordic DFU protocol (version supported by Gadgetbridge and SDK 15.x)
+* [x] Synchronize watch with phone
 
 TODO:
+* [x] Use external flash for firmware and persistence
 
-* Implement Nordic DFU protocol (version supported by Gadgetbridge and SDK 15.x)
-* Support updating using MCUBoot or embassy-boot
-* Support swapping to Inifinitime + MCUBoot
+TODO:
+* Support swapping to/from Inifinitime + MCUBoot
 * Support installing from Infinitime 'factory firmware'
 * Show clock in view mode
 * Low power in idle mode
