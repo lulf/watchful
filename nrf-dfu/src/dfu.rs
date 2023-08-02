@@ -23,7 +23,7 @@ pub struct DfuTarget<const MTU: usize> {
     fw_info: FirmwareInfo,
     hw_info: HardwareInfo,
 
-    buffer: [u8; MTU],
+    buffer: AlignedBuffer<MTU>,
     offset: usize,
     boffset: usize,
 }
@@ -205,7 +205,7 @@ impl<const MTU: usize> DfuTarget<MTU> {
             fw_info,
             hw_info,
 
-            buffer: [0; MTU],
+            buffer: AlignedBuffer([0; MTU]),
             boffset: 0,
             offset: 0,
         }
@@ -291,10 +291,8 @@ impl<const MTU: usize> DfuTarget<MTU> {
                     if let ObjectType::Data = obj.obj_type {
                         // Flush remaining data
                         if self.boffset > 0 {
-                            let mut buf = AlignedBuffer([0; MTU]);
-                            buf.as_mut()[..self.boffset].copy_from_slice(&self.buffer[..self.boffset]);
                             // Write at previous boundary which was left in memory.
-                            if let Err(e) = dfu.write(self.offset as u32, &buf.0) {
+                            if let Err(e) = dfu.write(self.offset as u32, &self.buffer.0) {
                                 #[cfg(feature = "defmt")]
                                 let e = defmt::Debug2Format(&e);
                                 warn!("Write Error: {:?}", e);
@@ -369,25 +367,17 @@ impl<const MTU: usize> DfuTarget<MTU> {
                 if let ObjectType::Data = obj.obj_type {
                     let mut pos = 0;
                     while pos < data.len() {
-                        let to_copy = core::cmp::min(data.len() - pos, self.buffer.len() - self.boffset);
+                        let to_copy = core::cmp::min(data.len() - pos, self.buffer.0.len() - self.boffset);
                         //info!("Copying {} bytes to internal buffer", to_copy);
-                        self.buffer[self.boffset..self.boffset + to_copy].copy_from_slice(&data[pos..pos + to_copy]);
+                        self.buffer.0[self.boffset..self.boffset + to_copy].copy_from_slice(&data[pos..pos + to_copy]);
 
-                        if self.boffset == self.buffer.len() {
-                            let mut buf = AlignedBuffer([0; MTU]);
-                            buf.as_mut()[..].copy_from_slice(&self.buffer[..]);
-                            info!("Flushing buffer to offset {}: {:x}", self.offset, &buf.0[..]);
-                            if let Err(e) = dfu.write(self.offset as u32, &buf.0) {
+                        if self.boffset == self.buffer.0.len() {
+                            if let Err(e) = dfu.write(self.offset as u32, &self.buffer.0) {
                                 #[cfg(feature = "defmt")]
                                 let e = defmt::Debug2Format(&e);
                                 warn!("Write Error: {:?}", e);
                                 return (DfuResponse::new(request, DfuResult::OpFailed), DfuStatus::InProgress);
                             }
-
-                            /*
-                            dfu.read(self.offset as u32, &mut self.read_buffer.0).unwrap();
-                            assert_eq!(&self.read_buffer.0, &self.buffer.0);
-                            */
 
                             self.offset += self.boffset;
                             self.boffset = 0;

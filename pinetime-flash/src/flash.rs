@@ -46,10 +46,10 @@ pub struct XtFlash<SPI: SpiDevice> {
 pub enum Error<SPI> {
     Spi(SPI),
     Flash(NorFlashErrorKind),
-    Busy,
     InvalidManufacturerId,
     InvalidMemoryType,
     NotInRam,
+    Unaligned,
 }
 
 impl<SPI> From<SPI> for Error<SPI> {
@@ -88,7 +88,7 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
 
     pub fn erase(&mut self, from: u32, to: u32) -> Result<(), Error<SPI::Error>> {
         check_erase(self, from, to).map_err(Error::Flash)?;
-        self.wait_done()?;
+
         // info!("Erase 0x{:x} - 0x{:x}", from, to);
         for page in (from..to).step_by(ERASE_SIZE) {
             self.write_enable()?;
@@ -137,20 +137,14 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
 
     pub fn write(&mut self, mut write_offset: u32, data: &[u8]) -> Result<(), Error<SPI::Error>> {
         check_write(self, write_offset, data.len()).map_err(Error::Flash)?;
-        self.wait_done()?;
+        if write_offset % PAGE_SIZE as u32 != 0 {
+            return Err(Error::Unaligned);
+        }
 
-        //info!("Write {} bytes to {:x}", data.len(), write_offset);
-        // TODO: Check for unaligned offset
-        for chunk in data.chunks(PAGE_SIZE) {
+        for chunk in data.chunks(PAGE_SIZE / 2) {
             self.write_enable()?;
 
             let offset = write_offset.to_be_bytes();
-            info!(
-                "Write chunk of len {} to {}, offset[3] {}",
-                chunk.len(),
-                write_offset,
-                offset[3]
-            );
             let cmd = [OpCode::ProgPage as u8, offset[1], offset[2], offset[3]];
             self.spi
                 .transaction(&mut [Operation::Write(&cmd[..]), Operation::Write(chunk)])?;
@@ -163,14 +157,15 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
         Ok(())
     }
 
-    pub fn read(&mut self, offset: u32, data: &mut [u8]) -> Result<(), Error<SPI::Error>> {
-        // info!("Read {} bytes from {:x}", data.len(), offset);
-        self.wait_done()?;
-        let offset = offset.to_be_bytes();
-        let cmd = [OpCode::Read as u8, offset[1], offset[2], offset[3]];
+    pub fn read(&mut self, mut offset: u32, data: &mut [u8]) -> Result<(), Error<SPI::Error>> {
+        for chunk in data.chunks_mut(PAGE_SIZE / 2) {
+            let off = offset.to_be_bytes();
+            let cmd = [OpCode::Read as u8, off[1], off[2], off[3]];
 
-        self.spi
-            .transaction(&mut [Operation::Write(&cmd[..]), Operation::Read(data)])?;
+            self.spi
+                .transaction(&mut [Operation::Write(&cmd[..]), Operation::Read(chunk)])?;
+            offset += chunk.len() as u32;
+        }
 
         Ok(())
     }
