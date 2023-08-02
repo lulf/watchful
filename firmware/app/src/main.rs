@@ -33,7 +33,7 @@ use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
 use embedded_text::TextBox;
 use heapless::Vec;
 use mipidsi::models::ST7789;
-use nrf_dfu::prelude::*;
+use nrf_dfu_target::prelude::*;
 use nrf_softdevice::ble::gatt_server::NotifyValueError;
 use nrf_softdevice::ble::{gatt_client, gatt_server, peripheral, Connection};
 use nrf_softdevice::{raw, Softdevice};
@@ -408,7 +408,7 @@ pub async fn gatt_server_task(
 
     let _ = gatt_server::run(&conn, server, |e| {
         let mut config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
-        if let Some(DfuStatus::Done) = server.handle(&mut target, &mut config.dfu, &mut dfu_conn, e) {
+        if let Some(DfuStatus::DoneReset) = server.handle(&mut target, &mut config.dfu, &mut dfu_conn, e) {
             let mut updater = FirmwareUpdater::new(config);
             info!("Firmware updated!");
             /*
