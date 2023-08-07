@@ -408,7 +408,8 @@ dependencies = [
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0-alpha.11",
  "embedded-hal-async",
- "embedded-io",
+ "embedded-io 0.5.0",
+ "embedded-io-async",
  "embedded-storage",
  "embedded-storage-async",
  "fixed",
@@ -433,7 +434,6 @@ dependencies = [
  "cfg-if",
  "critical-section",
  "defmt",
- "embedded-io",
  "futures-util",
  "heapless",
 ]
@@ -512,8 +512,20 @@ name = "embedded-io"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef1a6892d9eef45c8fa6b9e0086428a2cca8491aca8f787c534a3d6d0bcb3ced"
+
+[[package]]
+name = "embedded-io"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "658bbadc628dc286b9ae02f0cb0f5411c056eb7487b72f0083203f115de94060"
+
+[[package]]
+name = "embedded-io-async"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1394754ad749a560b25a0c70dcd2b66a450824a1311fc475bb2ccbfabe7f8414"
 dependencies = [
- "defmt",
+ "embedded-io 0.5.0",
 ]
 
 [[package]]
@@ -990,7 +1002,7 @@ dependencies = [
  "embedded-graphics",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0-alpha.11",
- "embedded-io",
+ "embedded-io 0.4.0",
  "embedded-storage",
  "embedded-text",
  "futures",
@@ -1021,7 +1033,7 @@ dependencies = [
  "embassy-sync",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0-alpha.11",
- "embedded-io",
+ "embedded-io 0.4.0",
  "embedded-storage",
  "embedded-storage-async",
  "nrf-softdevice-mbr 0.1.1",

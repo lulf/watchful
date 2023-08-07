@@ -28,7 +28,7 @@ fn main() -> ! {
     wdt_config.run_during_sleep = true;
     wdt_config.run_during_debug_halt = false;
 
-    //let flash = WatchdogFlash::start(Nvmc::new(p.NVMC), p.WDT, wdt_config);
+    let flash = WatchdogFlash::start(Nvmc::new(p.NVMC), p.WDT, wdt_config);
     let flash = Nvmc::new(p.NVMC);
     let flash = Mutex::new(RefCell::new(flash));
 

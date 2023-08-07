@@ -5,10 +5,10 @@
 use core::cell::RefCell;
 
 use defmt::{info, warn, Format};
-use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareUpdater as FirmwareUpdater, FirmwareUpdaterConfig};
+use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareState as FirmwareState, FirmwareUpdaterConfig};
 use embassy_embedded_hal::shared_bus::blocking::spi::{SpiDevice, SpiDeviceWithConfig};
 use embassy_executor::Spawner;
-use embassy_futures::block_on;
+use embassy_futures::select::{select, Either};
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::interrupt::Priority;
 use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, TWISPI0};
@@ -26,7 +26,7 @@ use embedded_graphics::mono_font::iso_8859_15::FONT_9X18_BOLD;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::{BinaryColor, Rgb565 as Rgb};
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::Rectangle;
+use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_storage::nor_flash::NorFlash;
 //use embedded_text::alignment::HorizontalAlignment;
 use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
@@ -43,6 +43,8 @@ use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
 use {defmt_rtt as _, panic_probe as _};
 
+mod clock;
+use crate::clock::clock;
 use crate::my_display_interface::SPIDeviceInterface;
 
 bind_interrupts!(struct Irqs {
@@ -55,8 +57,7 @@ const ATT_MTU: usize = MTU + 3;
 
 type Target = DfuTarget<256>;
 
-static CURRENT_TIME: Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>> =
-    Mutex::new(RefCell::new(time::PrimitiveDateTime::MIN));
+static CLOCK: clock::Clock = clock::Clock::new();
 
 type Flash = XtFlash<SpiDevice<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static, P0_05>>>;
 type Display = mipidsi::Display<
@@ -82,6 +83,7 @@ async fn main(s: Spawner) {
 
     s.spawn(softdevice_task(sd)).unwrap();
     s.spawn(watchdog_task()).unwrap();
+    s.spawn(clock(&CLOCK)).unwrap();
 
     info!("Hello world");
     // Button enable
@@ -119,10 +121,7 @@ async fn main(s: Spawner) {
     static FLASH: StaticCell<BMutex<NoopRawMutex, RefCell<Flash>>> = StaticCell::new();
     let flash = FLASH.init(BMutex::new(RefCell::new(xt_flash)));
 
-    static CURRENT_TIME: Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>> =
-        Mutex::new(RefCell::new(time::PrimitiveDateTime::MIN));
-
-    s.spawn(advertiser_task(s, sd, server, flash, &CURRENT_TIME, "Pinetime Embassy"))
+    s.spawn(advertiser_task(s, sd, server, flash, "Pinetime Embassy"))
         .unwrap();
 
     /*
@@ -168,23 +167,30 @@ async fn main(s: Spawner) {
                 display.clear(Rgb::WHITE).unwrap();
                 btn.wait_for_any_edge().await;
                 if btn.is_high() {
-                    info!("Button pressed");
                     state = WatchState::ViewTime;
-                } else {
-                    info!("Button not pressed");
                 }
                 // Idle task wait for reactions
                 // select(wait_for_button, wait_for_touch, timeout)
             }
             WatchState::ViewTime => {
                 display.clear(Rgb::BLACK).unwrap();
-                display_time(&mut display, &CURRENT_TIME).await;
-                Timer::after(Duration::from_secs(5)).await;
-                state = WatchState::Idle;
-            } /*  WatchState::ViewMenu => {
-                  // select(wait_for_button, wait_for_touch, timeout)
-                  state = WatchState::Workout;
-              }
+                display_time(&mut display).await;
+
+                match select(Timer::after(Duration::from_secs(5)), btn.wait_for_any_edge()).await {
+                    Either::First(_) => {
+                        state = WatchState::Idle;
+                    }
+                    Either::Second(_) => {
+                        if btn.is_high() {
+                            state = WatchState::ViewMenu;
+                        }
+                    }
+                }
+            }
+            WatchState::ViewMenu => {
+                display.clear(Rgb::BLACK).unwrap();
+                display_menu(&mut display).await;
+            } /*
               WatchState::Workout => {
                   // start pulse reading
                   // start accelerometer reading
@@ -203,18 +209,36 @@ async fn main(s: Spawner) {
 pub enum WatchState {
     Idle,
     ViewTime,
-    //  ViewMenu,
+    ViewMenu,
     //  FindPhone,
     //  Workout,
 }
 
-async fn display_time(
-    display: &mut Display,
-    current_time: &Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>>,
-) {
+async fn display_menu(display: &mut Display) {
+    // Rectangle with red 3 pixel wide stroke and green fill with the top left corner at (30, 20) and
+    // a size of (10, 15)
+    let style = PrimitiveStyleBuilder::new()
+        .stroke_color(Rgb::RED)
+        .stroke_width(3)
+        .fill_color(Rgb::GREEN)
+        .build();
+
+    Rectangle::new(Point::new(30, 20), Size::new(10, 15))
+        .into_styled(style)
+        .draw(display)
+        .unwrap();
+
+    // Rectangle with translation applied
+    Rectangle::new(Point::new(30, 20), Size::new(10, 15))
+        .translate(Point::new(-20, -10))
+        .into_styled(style)
+        .draw(display)
+        .unwrap();
+}
+
+async fn display_time(display: &mut Display) {
     //mipidsi::Display<DI, MODEL, RST>) {
-    let current_time = current_time.lock().await;
-    let current_time = current_time.borrow();
+    let current_time = CLOCK.get();
     let mut text: heapless::String<16> = heapless::String::new();
     use core::fmt::Write;
     write!(text, "{:02}:{:02}", current_time.hour(), current_time.minute()).unwrap();
@@ -323,8 +347,6 @@ pub struct CurrentTimeServiceClient {
     current_time: Vec<u8, 10>,
 }
 
-type TimeKeeper = DynamicSender<'static, time::PrimitiveDateTime>;
-
 impl CurrentTimeServiceClient {
     async fn get_time(&self) -> Result<time::PrimitiveDateTime, gatt_client::ReadError> {
         let data = self.current_time_read().await?;
@@ -401,26 +423,21 @@ pub async fn gatt_server_task(
     let mut config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
     let mut target = DfuTarget::new(config.dfu.size(), fw_info, hw_info);
     let mut magic = AlignedBuffer([0; 1]);
-    let mut updater = FirmwareUpdater::new(config);
-    updater
-        .mark_booted(&mut magic.0[..])
-        .expect("Failed to mark current firmware as good");
+    let mut state = FirmwareState::new(config.state, &mut magic.0);
+    state.mark_booted().expect("Failed to mark current firmware as good");
 
     let _ = gatt_server::run(&conn, server, |e| {
-        let mut config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
         if let Some(DfuStatus::DoneReset) = server.handle(&mut target, &mut config.dfu, &mut dfu_conn, e) {
-            let mut updater = FirmwareUpdater::new(config);
             info!("Firmware updated!");
-            /*
-            match updater.mark_updated(&mut magic.0[..]) {
+            match state.mark_updated() {
                 Ok(_) => {
                     info!("Firmware updated, resetting");
-                    //        cortex_m::peripheral::SCB::sys_reset();
+                    cortex_m::peripheral::SCB::sys_reset();
                 }
                 Err(e) => {
                     panic!("Error marking firmware updated: {:?}", e);
                 }
-            }*/
+            }
         }
     })
     .await;
@@ -433,7 +450,6 @@ pub async fn advertiser_task(
     sd: &'static Softdevice,
     server: &'static PineTimeServer,
     flash: &'static BMutex<NoopRawMutex, RefCell<Flash>>,
-    current_time: &'static Mutex<CriticalSectionRawMutex, RefCell<time::PrimitiveDateTime>>,
     name: &'static str,
 ) {
     let mut adv_data: Vec<u8, 31> = Vec::new();
@@ -465,9 +481,7 @@ pub async fn advertiser_task(
             match time_client.get_time().await {
                 Ok(time) => {
                     info!("Got time from peer: {:?}", defmt::Debug2Format(&time));
-                    let current = current_time.lock().await;
-                    let mut current = current.borrow_mut();
-                    *current = time;
+                    CLOCK.set(time);
                 }
                 Err(e) => {
                     info!("Error retrieving time: {:?}", e);
