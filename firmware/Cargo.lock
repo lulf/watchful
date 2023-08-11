@@ -125,7 +125,6 @@ checksum = "8ec610d8f49840a5b376c69663b6369e71f4b34484b9b2eb29fb918d92516cb9"
 dependencies = [
  "bare-metal",
  "bitfield",
- "critical-section",
  "embedded-hal 0.2.7",
  "volatile-register",
 ]
@@ -335,7 +334,6 @@ dependencies = [
  "embassy-sync",
  "embedded-storage",
  "embedded-storage-async",
- "nrf-softdevice-mbr 0.1.1 (git+https://github.com/embassy-rs/nrf-softdevice.git?branch=master)",
 ]
 
 [[package]]
@@ -345,7 +343,6 @@ dependencies = [
  "defmt",
  "embassy-futures",
  "embassy-sync",
- "embassy-time",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0-alpha.11",
  "embedded-hal-async",
@@ -356,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "embassy-executor"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "atomic-polyfill 1.0.3",
  "cortex-m",
@@ -802,15 +799,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nrf-softdevice-mbr"
-version = "0.1.1"
-
-[[package]]
-name = "nrf-softdevice-mbr"
-version = "0.1.1"
-source = "git+https://github.com/embassy-rs/nrf-softdevice.git?branch=master#3f4913f3791869fed5c8c152e9c0874658debfec"
-
-[[package]]
 name = "nrf-softdevice-s132"
 version = "0.1.1"
 
@@ -1016,28 +1004,6 @@ dependencies = [
  "static_cell",
  "time",
  "u8g2-fonts",
-]
-
-[[package]]
-name = "pinetime-embassy-bootloader"
-version = "0.1.0"
-dependencies = [
- "cortex-m",
- "cortex-m-rt",
- "defmt",
- "defmt-rtt",
- "embassy-boot",
- "embassy-boot-nrf",
- "embassy-futures",
- "embassy-nrf",
- "embassy-sync",
- "embedded-hal 0.2.7",
- "embedded-hal 1.0.0-alpha.11",
- "embedded-io 0.4.0",
- "embedded-storage",
- "embedded-storage-async",
- "nrf-softdevice-mbr 0.1.1",
- "static_cell",
 ]
 
 [[package]]
@@ -1318,3 +1284,7 @@ checksum = "9ee8f19f9d74293faf70901bc20ad067dc1ad390d2cbf1e3f75f721ffee908b6"
 dependencies = [
  "vcell",
 ]
+
+[[patch.unused]]
+name = "nrf-softdevice-mbr"
+version = "0.1.1"

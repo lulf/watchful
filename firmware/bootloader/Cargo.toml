@@ -4,22 +4,58 @@ name = "pinetime-embassy-bootloader"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
 
+[workspace]
+
 [dependencies]
-embassy-futures = { version = "0.1.0" }
-embassy-sync = { version = "0.2.0" }
-embassy-nrf = { version = "0.1.0", features = ["nrf52832", "nightly"] } #, "nfc-pins-as-gpio"] }
-embassy-boot = { version = "0.1.0" }
-embassy-boot-nrf = { version = "0.1.0", features = ["softdevice"] }
+embassy-futures = { version = "0.1.0", default-features = false }
+embassy-sync = { version = "0.2.0", default-features = false }
+embassy-nrf = { version = "0.1.0", default-features = false, features = ["rt", "nrf52832", "nightly", "unstable-traits", "time", "gpiote", "time-driver-rtc1"] }
+embassy-embedded-hal = { version = "0.1.0", default-features = false }
+embassy-boot = { version = "0.1.0", default-features = false }
+embassy-boot-nrf = { version = "0.1.0", default-features = false, features = ["softdevice"] }
 embedded-io = "0.4.0"
 embedded-storage-async = "0.4.0"
 embedded-storage = "0.3.0"
 embedded-hal = "=1.0.0-alpha.11"
 embedded-hal-02 = { package = "embedded-hal", version = "0.2.6" }
-nrf-softdevice-mbr = { version = "0.1.0" } 
+nrf-softdevice-mbr = { version = "0.1.0" }
+pinetime-flash = { version = "0.1.0", path = "../../pinetime-flash" }
 
-defmt = { version = "0.3", optional = true }
-defmt-rtt = { version = "0.4", optional = true }
+defmt = "0.3"
+defmt-rtt = "0.4"
+panic-probe = { version = "0.3", features = ["print-defmt"], optional = true }
 
 static_cell = "1.1"
 cortex-m = { version = "0.7.6", features = ["inline-asm", "critical-section-single-core"] }
 cortex-m-rt = "0.7.0"
+
+[patch.crates-io]
+#embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
+#embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
+#embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
+#embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
+#embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
+#embassy-boot = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
+#embassy-boot-nrf = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
+#embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
+
+embassy-executor = { path = "../../../embassy/embassy-executor" }
+embassy-time = {path = "../../../embassy/embassy-time"}
+embassy-sync = {path = "../../../embassy/embassy-sync"}
+embassy-nrf = {path = "../../../embassy/embassy-nrf"}
+embassy-embedded-hal = {path = "../../../embassy/embassy-embedded-hal"}
+embassy-boot = {path = "../../../embassy/embassy-boot/boot"}
+embassy-boot-nrf = {path = "../../../embassy/embassy-boot/nrf"}
+embassy-futures = {path = "../../../embassy/embassy-futures"}
+
+
+#nrf-softdevice = { git = "https://github.com/embassy-rs/nrf-softdevice.git", rev = "3f4913f3791869fed5c8c152e9c0874658debfec" }
+#nrf-softdevice-mbr = { git = "https://github.com/embassy-rs/nrf-softdevice.git", rev = "3f4913f3791869fed5c8c152e9c0874658debfec" }
+#nrf-softdevice-s132 = { git = "https://github.com/embassy-rs/nrf-softdevice.git", rev = "3f4913f3791869fed5c8c152e9c0874658debfec" }
+#
+nrf-softdevice = { path = "../../../nrf-softdevice/nrf-softdevice"}
+nrf-softdevice-mbr = { path = "../../../nrf-softdevice/nrf-softdevice-mbr"}
+nrf-softdevice-s132 = { path = "../../../nrf-softdevice/nrf-softdevice-s132"}
+
+[profile.release]
+debug = 2

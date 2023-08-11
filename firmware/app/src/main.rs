@@ -76,8 +76,10 @@ async fn main(s: Spawner) {
     config.time_interrupt_priority = Priority::P2;
     let p = embassy_nrf::init(config);
 
+    info!("Hello world");
     let sd = enable_softdevice("Pinetime Embassy");
 
+    info!("SD enabled");
     static GATT: StaticCell<PineTimeServer> = StaticCell::new();
     let server = GATT.init(PineTimeServer::new(sd).unwrap());
 
@@ -85,7 +87,6 @@ async fn main(s: Spawner) {
     s.spawn(watchdog_task()).unwrap();
     s.spawn(clock(&CLOCK)).unwrap();
 
-    info!("Hello world");
     // Button enable
     let _btn_enable = Output::new(p.P0_15, Level::High, OutputDrive::Standard);
 
@@ -242,6 +243,7 @@ async fn display_time(display: &mut Display) {
     let mut text: heapless::String<16> = heapless::String::new();
     use core::fmt::Write;
     write!(text, "{:02}:{:02}", current_time.hour(), current_time.minute()).unwrap();
+    //write!(text, "FOO").unwrap();
     let font = FontRenderer::new::<fonts::u8g2_font_spleen32x64_mu>();
 
     font.render_aligned(

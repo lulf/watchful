@@ -4,7 +4,7 @@ MEMORY
   MBR                               : ORIGIN = 0x00000000, LENGTH = 4K
   SOFTDEVICE                        : ORIGIN = 0x00001000, LENGTH = 152K
   ACTIVE                            : ORIGIN = 0x00026000, LENGTH = 324K
-  FLASH                             : ORIGIN = 0x00077000, LENGTH = 32K
+  FLASH                             : ORIGIN = 0x00077000, LENGTH = 28K
 
   DFU                               : ORIGIN = 0x00000000, LENGTH = 328K
   BOOTLOADER_STATE                  : ORIGIN = 0x003FF000, LENGTH = 4K

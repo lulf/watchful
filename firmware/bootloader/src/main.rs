@@ -4,12 +4,27 @@
 use core::cell::RefCell;
 
 use cortex_m_rt::{entry, exception};
-#[cfg(feature = "defmt")]
+use defmt::info;
 use defmt_rtt as _;
 use embassy_boot_nrf::*;
+use embassy_embedded_hal::flash::partition::BlockingPartition;
+use embassy_embedded_hal::shared_bus::blocking::spi::{ManagedSpiDevice, SpiDeviceWithConfig};
+use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
+use embassy_nrf::interrupt::Priority;
 use embassy_nrf::nvmc::Nvmc;
-use embassy_nrf::wdt;
+use embassy_nrf::peripherals::{self, P0_05, TWISPI0};
+use embassy_nrf::{bind_interrupts, spim, wdt};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
+#[cfg(feature = "panic-probe")]
+use panic_probe as _;
+use pinetime_flash::*;
+
+bind_interrupts!(struct Irqs {
+    SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
+});
+
+type ExternalFlash<'a> = XtFlash<ManagedSpiDevice<spim::Spim<'a, TWISPI0>, Output<'a, P0_05>>>;
 
 #[entry]
 fn main() -> ! {
@@ -17,28 +32,81 @@ fn main() -> ! {
 
     // Uncomment this if you are debugging the bootloader with debugger/RTT attached,
     // as it prevents a hard fault when accessing flash 'too early' after boot.
-    /*
-        for i in 0..10000000 {
-            cortex_m::asm::nop();
-        }
-    */
+    for i in 0..10000000 {
+        cortex_m::asm::nop();
+    }
 
     let mut wdt_config = wdt::Config::default();
     wdt_config.timeout_ticks = 32768 * 5; // timeout seconds
     wdt_config.run_during_sleep = true;
     wdt_config.run_during_debug_halt = false;
 
-    let flash = WatchdogFlash::start(Nvmc::new(p.NVMC), p.WDT, wdt_config);
-    let flash = Nvmc::new(p.NVMC);
-    let flash = Mutex::new(RefCell::new(flash));
+    let internal_flash = WatchdogFlash::start(Nvmc::new(p.NVMC), p.WDT, wdt_config);
+    let internal_flash = Mutex::new(RefCell::new(internal_flash));
 
-    let config = BootLoaderConfig::from_linkerfile_blocking(&flash);
+    let mut default_config = spim::Config::default();
+    default_config.frequency = spim::Frequency::M8;
+    default_config.mode = spim::MODE_3;
+
+    let spim = spim::Spim::new(p.TWISPI0, Irqs, p.P0_02, p.P0_04, p.P0_03, default_config);
+
+    let flash_cs = Output::new(p.P0_05, Level::High, OutputDrive::Standard);
+    let flash_spi = ManagedSpiDevice::new(spim, flash_cs);
+    let external_flash = XtFlash::new(flash_spi);
+    let external_flash = external_flash.unwrap();
+    let external_flash = Mutex::new(RefCell::new(external_flash));
+
+    let config = create_flash_config(&internal_flash, &external_flash);
     let active_offset = config.active.offset();
-    let mut bl: BootLoader<_, _, _> = BootLoader::new(config);
 
-    bl.prepare();
+    let mut bl: BootLoader = BootLoader::prepare(config);
+
+    drop(internal_flash);
+    drop(external_flash);
 
     unsafe { bl.load(active_offset) }
+}
+
+pub fn create_flash_config<'a, 'b>(
+    internal: &'a Mutex<NoopRawMutex, RefCell<WatchdogFlash<Nvmc<'b>>>>,
+    external: &'a Mutex<NoopRawMutex, RefCell<ExternalFlash<'b>>>,
+) -> BootLoaderConfig<
+    BlockingPartition<'a, NoopRawMutex, WatchdogFlash<Nvmc<'b>>>,
+    BlockingPartition<'a, NoopRawMutex, ExternalFlash<'b>>,
+    BlockingPartition<'a, NoopRawMutex, ExternalFlash<'b>>,
+> {
+    extern "C" {
+        static __bootloader_state_start: u32;
+        static __bootloader_state_end: u32;
+        static __bootloader_active_start: u32;
+        static __bootloader_active_end: u32;
+        static __bootloader_dfu_start: u32;
+        static __bootloader_dfu_end: u32;
+    }
+
+    let active = unsafe {
+        let start = &__bootloader_active_start as *const u32 as u32;
+        let end = &__bootloader_active_end as *const u32 as u32;
+        // trace!("ACTIVE: 0x{:x} - 0x{:x}", start, end);
+
+        BlockingPartition::new(internal, start, end - start)
+    };
+    let dfu = unsafe {
+        let start = &__bootloader_dfu_start as *const u32 as u32;
+        let end = &__bootloader_dfu_end as *const u32 as u32;
+        // trace!("DFU: 0x{:x} - 0x{:x}", start, end);
+
+        BlockingPartition::new(external, start, end - start)
+    };
+    let state = unsafe {
+        let start = &__bootloader_state_start as *const u32 as u32;
+        let end = &__bootloader_state_end as *const u32 as u32;
+        // trace!("STATE: 0x{:x} - 0x{:x}", start, end);
+
+        BlockingPartition::new(external, start, end - start)
+    };
+
+    BootLoaderConfig { active, dfu, state }
 }
 
 #[no_mangle]
@@ -55,6 +123,7 @@ unsafe fn DefaultHandler(_: i16) -> ! {
     panic!("DefaultHandler #{:?}", irqn);
 }
 
+#[cfg(not(feature = "panic-probe"))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     cortex_m::asm::udf();
