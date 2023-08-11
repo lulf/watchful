@@ -137,10 +137,6 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
 
     pub fn write(&mut self, mut write_offset: u32, data: &[u8]) -> Result<(), Error<SPI::Error>> {
         check_write(self, write_offset, data.len()).map_err(Error::Flash)?;
-        if write_offset % PAGE_SIZE as u32 != 0 {
-            return Err(Error::Unaligned);
-        }
-
         for chunk in data.chunks(PAGE_SIZE / 2) {
             self.write_enable()?;
 
@@ -173,7 +169,14 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
 
 impl<SPI: core::fmt::Debug> NorFlashError for Error<SPI> {
     fn kind(&self) -> NorFlashErrorKind {
-        NorFlashErrorKind::Other
+        match self {
+            Self::Flash(kind) => *kind,
+            Self::InvalidManufacturerId => NorFlashErrorKind::Other,
+            Self::InvalidMemoryType => NorFlashErrorKind::Other,
+            Self::NotInRam => NorFlashErrorKind::Other,
+            Self::Unaligned => NorFlashErrorKind::NotAligned,
+            Self::Spi(_) => NorFlashErrorKind::Other,
+        }
     }
 }
 
