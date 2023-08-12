@@ -74,14 +74,9 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
             return Err(Error::InvalidMemoryType);
         }
 
-        let mut value: [u8; 1] = [0x98];
-        spi.write(&value[..])?;
+        spi.write(&[0x98])?;
 
-        let mut value: [u8; 1] = [0x50];
-        spi.write(&value[..])?;
-
-        let mut value: [u8; 3] = [0x01, 0x00, 0x00];
-        spi.transfer_in_place(&mut value[..])?;
+        spi.write(&[0x50])?;
 
         Ok(Self { spi })
     }
@@ -217,10 +212,6 @@ const SRAM_UPPER: usize = 0x3000_0000;
 
 // TODO: replace transmutes with core::ptr::metadata once it's stable
 pub(crate) fn slice_ptr_parts<T>(slice: *const [T]) -> (*const T, usize) {
-    unsafe { mem::transmute(slice) }
-}
-
-pub(crate) fn slice_ptr_parts_mut<T>(slice: *mut [T]) -> (*mut T, usize) {
     unsafe { mem::transmute(slice) }
 }
 

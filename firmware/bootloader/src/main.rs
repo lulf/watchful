@@ -4,13 +4,11 @@
 use core::cell::RefCell;
 
 use cortex_m_rt::{entry, exception};
-use defmt::info;
 use defmt_rtt as _;
 use embassy_boot_nrf::*;
 use embassy_embedded_hal::flash::partition::BlockingPartition;
-use embassy_embedded_hal::shared_bus::blocking::spi::{SpiDevice, SpiDeviceWithConfig};
-use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
-use embassy_nrf::interrupt::Priority;
+use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
+use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_nrf::nvmc::Nvmc;
 use embassy_nrf::peripherals::{self, P0_05, TWISPI0};
 use embassy_nrf::{bind_interrupts, spim, wdt};
@@ -32,9 +30,9 @@ fn main() -> ! {
 
     // Uncomment this if you are debugging the bootloader with debugger/RTT attached,
     // as it prevents a hard fault when accessing flash 'too early' after boot.
-    for i in 0..10000000 {
-        cortex_m::asm::nop();
-    }
+    // for i in 0..10000000 {
+    //     cortex_m::asm::nop();
+    // }
 
     let mut wdt_config = wdt::Config::default();
     wdt_config.timeout_ticks = 32768 * 5; // timeout seconds
@@ -48,7 +46,7 @@ fn main() -> ! {
     default_config.frequency = spim::Frequency::M8;
     default_config.mode = spim::MODE_3;
 
-    let mut active_offset = 0;
+    let active_offset;
     let bl: BootLoader = {
         let spim = spim::Spim::new(p.TWISPI0, Irqs, p.P0_02, p.P0_04, p.P0_03, default_config);
         let bus = Mutex::new(RefCell::new(spim));
