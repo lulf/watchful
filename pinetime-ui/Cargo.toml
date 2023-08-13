@@ -1,0 +1,12 @@
+[package]
+name = "pinetime-ui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+embedded-graphics = "0.8.0"
+embedded-text = "0.6.0"
+defmt = { version = "0.3", optional = true }
+
+[dev-dependencies]
+embedded-graphics-simulator = "0.5.0"
