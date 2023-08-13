@@ -14,7 +14,7 @@ use embassy_nrf::interrupt::Priority;
 use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
-use embassy_nrf::{bind_interrupts, pac, peripherals, spim};
+use embassy_nrf::{bind_interrupts, pac, peripherals, spim, twim};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::blocking_mutex::Mutex as BMutex;
 use embassy_sync::channel::{Channel, DynamicSender, Sender};
@@ -38,6 +38,7 @@ use nrf_softdevice::ble::gatt_server::NotifyValueError;
 use nrf_softdevice::ble::{gatt_client, gatt_server, peripheral, Connection};
 use nrf_softdevice::{raw, Softdevice};
 use pinetime_flash::XtFlash;
+use pinetime_ui::{MenuChoice, MenuView};
 use static_cell::StaticCell;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
@@ -49,6 +50,8 @@ use crate::my_display_interface::SPIDeviceInterface;
 
 bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
+    SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1 => twim::InterruptHandler<peripherals::TWISPI1>;
+
 });
 
 const MTU: usize = 120;
@@ -87,6 +90,18 @@ async fn main(s: Spawner) {
     s.spawn(watchdog_task()).unwrap();
     s.spawn(clock(&CLOCK)).unwrap();
 
+    // Touch peripheral
+    let mut twim_config = twim::Config::default();
+    twim_config.frequency = twim::Frequency::K400;
+    let i2c = twim::Twim::new(p.TWISPI1, Irqs, p.P0_06, p.P0_07, twim_config);
+    // setup touchpad external interrupt pin: P0.28/AIN4 (TP_INT)
+    let touch_int = Input::new(p.P0_28, Pull::Up);
+    // setup touchpad reset pin: P0.10/NFC2 (TP_RESET)
+    let touch_rst = Output::new(p.P0_10, Level::High, OutputDrive::Standard);
+
+    let mut touchpad = cst816s::CST816S::new(i2c, touch_int, touch_rst);
+    touchpad.setup(&mut embassy_time::Delay).unwrap();
+
     // Button enable
     let _btn_enable = Output::new(p.P0_15, Level::High, OutputDrive::Standard);
 
@@ -122,34 +137,14 @@ async fn main(s: Spawner) {
     static FLASH: StaticCell<BMutex<NoopRawMutex, RefCell<Flash>>> = StaticCell::new();
     let flash = FLASH.init(BMutex::new(RefCell::new(xt_flash)));
 
+    let config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
+    let mut magic = AlignedBuffer([0; 1]);
+    let mut state = FirmwareState::new(config.state, &mut magic.0);
+    state.mark_booted().expect("Failed to mark current firmware as good");
+
     s.spawn(advertiser_task(s, sd, server, flash, "Pinetime Embassy"))
         .unwrap();
 
-    /*
-    let raw_image_data = ImageRawLE::new(include_bytes!("../assets/ferris.raw"), 86);
-    let ferris = Image::new(&raw_image_data, Point::new(34, 8));
-
-    // draw image on black background
-    display.clear(Rgb::BLACK).unwrap();
-    ferris.draw(&mut display).unwrap();
-    loop {}*/
-
-    /*
-    let character_style = MonoTextStyle::new(&FONT_10X20, Rgb::YELLOW);
-    let textbox_style = TextBoxStyleBuilder::new()
-        .height_mode(HeightMode::Exact(embedded_text::style::VerticalOverdraw::Hidden))
-        .alignment(HorizontalAlignment::Center)
-        .vertical_alignment(embedded_text::alignment::VerticalAlignment::Middle)
-        .paragraph_spacing(6)
-        .build();
-
-    let bounds = Rectangle::new(Point::zero(), Size::new(240, 240));
-
-    let text_box = TextBox::with_textbox_style(text, bounds, character_style, textbox_style);
-    text_box.draw(&mut display).unwrap();
-    */
-    //let font = FontRenderer::new::<fonts::u8g2_font_haxrcorp4089_t_cyrillic>();
-    //
     let di = SPIDeviceInterface::new(display_spi, dc);
 
     // create the ILI9486 display driver from the display interface and optional RST pin
@@ -183,14 +178,48 @@ async fn main(s: Spawner) {
                     }
                     Either::Second(_) => {
                         if btn.is_high() {
-                            state = WatchState::ViewMenu;
+                            state = WatchState::ViewMenu(MenuView::main());
                         }
                     }
                 }
             }
-            WatchState::ViewMenu => {
-                display.clear(Rgb::BLACK).unwrap();
-                display_menu(&mut display).await;
+            WatchState::ViewMenu(menu) => {
+                menu.draw(&mut display).unwrap();
+
+                //                select(Timer::after(Duration::from_secs(5)), btn.wait_for_any_edge()).await;
+
+                let selected;
+                loop {
+                    if let Some(evt) = touchpad.read_one_touch_event(true) {
+                        if let cst816s::TouchGesture::SingleClick = evt.gesture {
+                            let touched = Point::new(evt.x, evt.y);
+                            if let Some(s) = menu.intersects(touched) {
+                                selected = s;
+                                break;
+                            }
+                        }
+                    } else {
+                        Timer::after(Duration::from_micros(1)).await;
+                    }
+                }
+
+                match selected {
+                    MenuChoice::Workout => {
+                        defmt::info!("Not implemented");
+                        state = WatchState::Idle;
+                    }
+                    MenuChoice::FindPhone => {
+                        defmt::info!("Not implemented");
+                        state = WatchState::Idle;
+                    }
+                    MenuChoice::Settings => {
+                        state = WatchState::ViewMenu(MenuView::settings());
+                    }
+                    MenuChoice::Firmware => {
+                        defmt::info!("Not implemented");
+                        state = WatchState::Idle;
+                    }
+                }
             } /*
               WatchState::Workout => {
                   // start pulse reading
@@ -207,34 +236,12 @@ async fn main(s: Spawner) {
     }
 }
 
-pub enum WatchState {
+pub enum WatchState<'a> {
     Idle,
     ViewTime,
-    ViewMenu,
+    ViewMenu(MenuView<'a>),
     //  FindPhone,
     //  Workout,
-}
-
-async fn display_menu(display: &mut Display) {
-    // Rectangle with red 3 pixel wide stroke and green fill with the top left corner at (30, 20) and
-    // a size of (10, 15)
-    let style = PrimitiveStyleBuilder::new()
-        .stroke_color(Rgb::RED)
-        .stroke_width(3)
-        .fill_color(Rgb::GREEN)
-        .build();
-
-    Rectangle::new(Point::new(30, 20), Size::new(10, 15))
-        .into_styled(style)
-        .draw(display)
-        .unwrap();
-
-    // Rectangle with translation applied
-    Rectangle::new(Point::new(30, 20), Size::new(10, 15))
-        .translate(Point::new(-20, -10))
-        .into_styled(style)
-        .draw(display)
-        .unwrap();
 }
 
 async fn display_time(display: &mut Display) {
@@ -426,7 +433,6 @@ pub async fn gatt_server_task(
     let mut target = DfuTarget::new(config.dfu.size(), fw_info, hw_info);
     let mut magic = AlignedBuffer([0; 1]);
     let mut state = FirmwareState::new(config.state, &mut magic.0);
-    state.mark_booted().expect("Failed to mark current firmware as good");
 
     let _ = gatt_server::run(&conn, server, |e| {
         if let Some(DfuStatus::DoneReset) = server.handle(&mut target, &mut config.dfu, &mut dfu_conn, e) {
