@@ -1,15 +1,69 @@
 #![no_std]
 
-use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X9};
+use core::fmt::Write as _;
+
+use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::Rgb565 as Rgb;
 use embedded_graphics::prelude::{DrawTarget, *};
-use embedded_graphics::primitives::{Circle, Line, PrimitiveStyle, Rectangle};
-use embedded_graphics::text::Text;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::renderer::CharacterStyle;
+use embedded_graphics::text::{Baseline, Text, TextStyleBuilder};
+use u8g2_fonts::{fonts, U8g2TextStyle};
 
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 240;
-const MENU_ITEMS: u32 = 3;
+const GRID_ITEMS: u32 = 3;
+
+#[derive(Clone, Copy)]
+pub struct FirmwareDetails {
+    name: &'static str,
+    version: &'static str,
+    commit: Option<&'static str>,
+    validated: bool,
+}
+
+fn menu_text_style() -> U8g2TextStyle<Rgb> {
+    //U8g2TextStyle::new(fonts::u8g2_font_unifont_t_symbols, Rgb::YELLOW)
+    U8g2TextStyle::new(fonts::u8g2_font_spleen16x32_mf, Rgb::YELLOW)
+}
+
+fn text_text_style() -> U8g2TextStyle<Rgb> {
+    U8g2TextStyle::new(fonts::u8g2_font_unifont_t_symbols, Rgb::YELLOW)
+}
+
+impl FirmwareDetails {
+    pub const fn new(name: &'static str, version: &'static str, commit: Option<&'static str>, validated: bool) -> Self {
+        Self {
+            name,
+            version,
+            commit,
+            validated,
+        }
+    }
+
+    pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
+        let start = Point::new(0, 10);
+
+        let mut info: heapless::String<128> = heapless::String::new();
+        write!(info, "Name: {}\nVersion: {}\n", self.name, self.version).unwrap();
+        if let Some(commit) = self.commit {
+            write!(info, "Commit: {}", commit).unwrap();
+        }
+
+        Text::with_text_style(
+            &info,
+            start,
+            text_text_style(),
+            TextStyleBuilder::new()
+                .baseline(Baseline::Alphabetic)
+                .line_height(embedded_graphics::text::LineHeight::Pixels(25))
+                .build(),
+        )
+        .draw(display)?;
+        Ok(())
+    }
+}
 
 pub enum DisplayState {
     Watch,
@@ -27,6 +81,38 @@ pub enum MenuChoice {
     Firmware,
 }
 
+#[derive(Clone, Copy)]
+pub struct FirmwareView {
+    details: FirmwareDetails,
+    item: MenuItem<'static>,
+}
+
+impl FirmwareView {
+    pub fn new(details: FirmwareDetails) -> Self {
+        let valid = details.validated;
+        Self {
+            details,
+            item: MenuItem::new(if valid { "✓ Validated" } else { "❌ Validate" }, 2),
+        }
+    }
+
+    pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
+        display.clear(Rgb::WHITE)?;
+
+        // First draw the firmware info.
+        self.details.draw(display)?;
+
+        // Then a clickable item to mark it as working.
+        self.item.draw(display)?;
+        Ok(())
+    }
+
+    pub fn validated(&self, pos: Point) -> bool {
+        self.item.is_contained_by(pos)
+    }
+}
+
+#[derive(Clone, Copy)]
 pub enum MenuView<'a> {
     Main {
         workout: MenuItem<'a>,
@@ -103,6 +189,7 @@ impl<'a> MenuView<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct MenuItem<'a> {
     text: &'a str,
     idx: u32,
@@ -120,25 +207,26 @@ impl<'a> MenuItem<'a> {
             .into_styled(line_style)
             .draw(display)?;
 
-        let text_style = MonoTextStyle::new(&FONT_10X20, Rgb::YELLOW);
-        Text::with_alignment(
+        Text::with_text_style(
             self.text,
             Point::new(
                 (WIDTH as i32) / 2,
-                self.idx as i32 * (HEIGHT as i32 / MENU_ITEMS as i32) + 45,
+                self.idx as i32 * (HEIGHT as i32 / GRID_ITEMS as i32) + 45,
             ),
-            text_style,
-            embedded_graphics::text::Alignment::Center,
+            menu_text_style(),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .build(),
         )
         .draw(display)?;
         Ok(())
     }
 
     fn placement(&self) -> (Point, Point) {
-        let start = Point::new(10, (self.idx * HEIGHT / MENU_ITEMS + 10) as i32);
+        let start = Point::new(10, (self.idx * HEIGHT / GRID_ITEMS + 10) as i32);
         let end = Point::new(
             start.x + WIDTH as i32 - 20,
-            start.y + (HEIGHT as i32 / MENU_ITEMS as i32) - 20,
+            start.y + (HEIGHT as i32 / GRID_ITEMS as i32) - 20,
         );
         (start, end)
     }

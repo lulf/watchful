@@ -4,9 +4,10 @@
 
 use core::cell::RefCell;
 
-use defmt::{info, warn, Format};
+use defmt::{info, warn};
+use embassy_boot::State as FwState;
 use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareState as FirmwareState, FirmwareUpdaterConfig};
-use embassy_embedded_hal::shared_bus::blocking::spi::{SpiDevice, SpiDeviceWithConfig};
+use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
@@ -15,22 +16,12 @@ use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, pac, peripherals, spim, twim};
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BMutex;
-use embassy_sync::channel::{Channel, DynamicSender, Sender};
-use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Duration, Timer};
-use embedded_graphics::image::{Image, ImageRawLE};
-use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10};
-use embedded_graphics::mono_font::iso_8859_15::FONT_9X18_BOLD;
-use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::pixelcolor::{BinaryColor, Rgb565 as Rgb};
+use embedded_graphics::pixelcolor::Rgb565 as Rgb;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_storage::nor_flash::NorFlash;
-//use embedded_text::alignment::HorizontalAlignment;
-use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
-use embedded_text::TextBox;
 use heapless::Vec;
 use mipidsi::models::ST7789;
 use nrf_dfu_target::prelude::*;
@@ -38,7 +29,7 @@ use nrf_softdevice::ble::gatt_server::NotifyValueError;
 use nrf_softdevice::ble::{gatt_client, gatt_server, peripheral, Connection};
 use nrf_softdevice::{raw, Softdevice};
 use pinetime_flash::XtFlash;
-use pinetime_ui::{MenuChoice, MenuView};
+use pinetime_ui::{FirmwareDetails, FirmwareView, MenuChoice, MenuView};
 use static_cell::StaticCell;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
@@ -72,6 +63,14 @@ type Display = mipidsi::Display<
     Output<'static, P0_26>,
 >;
 
+fn firmware_details(validated: bool) -> FirmwareDetails {
+    const CARGO_NAME: &str = env!("CARGO_PKG_NAME");
+    const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
+    const COMMIT: Option<&str> = option_env!("GIT_SHA");
+
+    FirmwareDetails::new(CARGO_NAME, CARGO_VERSION, COMMIT, validated)
+}
+
 #[embassy_executor::main]
 async fn main(s: Spawner) {
     let mut config = embassy_nrf::config::Config::default();
@@ -79,10 +78,8 @@ async fn main(s: Spawner) {
     config.time_interrupt_priority = Priority::P2;
     let p = embassy_nrf::init(config);
 
-    info!("Hello world");
     let sd = enable_softdevice("Pinetime Embassy");
 
-    info!("SD enabled");
     static GATT: StaticCell<PineTimeServer> = StaticCell::new();
     let server = GATT.init(PineTimeServer::new(sd).unwrap());
 
@@ -137,11 +134,6 @@ async fn main(s: Spawner) {
     static FLASH: StaticCell<BMutex<NoopRawMutex, RefCell<Flash>>> = StaticCell::new();
     let flash = FLASH.init(BMutex::new(RefCell::new(xt_flash)));
 
-    let config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
-    let mut magic = AlignedBuffer([0; 1]);
-    let mut state = FirmwareState::new(config.state, &mut magic.0);
-    state.mark_booted().expect("Failed to mark current firmware as good");
-
     s.spawn(advertiser_task(s, sd, server, flash, "Pinetime Embassy"))
         .unwrap();
 
@@ -155,6 +147,9 @@ async fn main(s: Spawner) {
 
     display.set_orientation(mipidsi::Orientation::Portrait(false)).unwrap();
 
+    let config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
+    let mut magic = AlignedBuffer([0; 1]);
+    let mut fw = FirmwareState::new(config.state, &mut magic.0);
     let mut state = WatchState::Idle;
     loop {
         match state {
@@ -186,38 +181,83 @@ async fn main(s: Spawner) {
             WatchState::ViewMenu(menu) => {
                 menu.draw(&mut display).unwrap();
 
-                //                select(Timer::after(Duration::from_secs(5)), btn.wait_for_any_edge()).await;
-
-                let selected;
-                loop {
-                    if let Some(evt) = touchpad.read_one_touch_event(true) {
-                        if let cst816s::TouchGesture::SingleClick = evt.gesture {
-                            let touched = Point::new(evt.x, evt.y);
-                            if let Some(s) = menu.intersects(touched) {
-                                selected = s;
-                                break;
+                match select(btn.wait_for_any_edge(), async {
+                    let selected;
+                    loop {
+                        if let Some(evt) = touchpad.read_one_touch_event(true) {
+                            if let cst816s::TouchGesture::SingleClick = evt.gesture {
+                                let touched = Point::new(evt.x, evt.y);
+                                if let Some(s) = menu.intersects(touched) {
+                                    selected = s;
+                                    break;
+                                }
                             }
+                        } else {
+                            Timer::after(Duration::from_micros(1)).await;
                         }
-                    } else {
-                        Timer::after(Duration::from_micros(1)).await;
                     }
+                    selected
+                })
+                .await
+                {
+                    Either::First(_) => {
+                        if let MenuView::Settings { .. } = menu {
+                            state = WatchState::ViewMenu(MenuView::main());
+                        } else {
+                            state = WatchState::ViewTime;
+                        }
+                    }
+                    Either::Second(selected) => match selected {
+                        MenuChoice::Workout => {
+                            defmt::info!("Not implemented");
+                            state = WatchState::ViewTime;
+                        }
+                        MenuChoice::FindPhone => {
+                            defmt::info!("Not implemented");
+                            state = WatchState::ViewTime;
+                        }
+                        MenuChoice::Settings => {
+                            state = WatchState::ViewMenu(MenuView::settings());
+                        }
+                        MenuChoice::Firmware => {
+                            let validated = FwState::Boot == fw.get_state().expect("Failed to read firmware state");
+                            state = WatchState::ViewFirmware(FirmwareView::new(firmware_details(validated)));
+                        }
+                    },
                 }
+            }
+            WatchState::ViewFirmware(view) => {
+                view.draw(&mut display).unwrap();
 
-                match selected {
-                    MenuChoice::Workout => {
-                        defmt::info!("Not implemented");
-                        state = WatchState::Idle;
+                match select(btn.wait_for_any_edge(), async {
+                    loop {
+                        if let Some(evt) = touchpad.read_one_touch_event(true) {
+                            if let cst816s::TouchGesture::SingleClick = evt.gesture {
+                                let touched = Point::new(evt.x, evt.y);
+                                if view.validated(touched) {
+                                    break;
+                                }
+                            }
+                        } else {
+                            Timer::after(Duration::from_millis(1)).await;
+                        }
                     }
-                    MenuChoice::FindPhone => {
-                        defmt::info!("Not implemented");
-                        state = WatchState::Idle;
-                    }
-                    MenuChoice::Settings => {
+                })
+                .await
+                {
+                    Either::First(_) => {
+                        info!("Button pressed, back to settings");
                         state = WatchState::ViewMenu(MenuView::settings());
                     }
-                    MenuChoice::Firmware => {
-                        defmt::info!("Not implemented");
-                        state = WatchState::Idle;
+                    Either::Second(_) => {
+                        let validated = FwState::Boot == fw.get_state().expect("Failed to read firmware state");
+                        if !validated {
+                            fw.mark_booted().expect("Failed to mark current firmware as good");
+                            info!("Firmware marked as valid");
+                            state = WatchState::ViewMenu(MenuView::main());
+                        } else {
+                            state = WatchState::ViewFirmware(FirmwareView::new(firmware_details(validated)));
+                        }
                     }
                 }
             } /*
@@ -240,6 +280,7 @@ pub enum WatchState<'a> {
     Idle,
     ViewTime,
     ViewMenu(MenuView<'a>),
+    ViewFirmware(FirmwareView),
     //  FindPhone,
     //  Workout,
 }

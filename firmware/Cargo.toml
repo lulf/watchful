@@ -34,3 +34,8 @@ nrf-softdevice-s132 = { path = "../../nrf-softdevice/nrf-softdevice-s132"}
 
 [profile.release]
 debug = 2
+codegen-units = 1
+incremental = false
+lto = "fat"
+opt-level = 's' # try `s` or `z`, sometimes one is smaller, sometimes the other.
+

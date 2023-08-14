@@ -1055,6 +1055,7 @@ dependencies = [
  "defmt-rtt",
  "display-interface",
  "display-interface-spi",
+ "embassy-boot",
  "embassy-boot-nrf",
  "embassy-embedded-hal",
  "embassy-executor",
@@ -1124,6 +1125,8 @@ dependencies = [
  "defmt",
  "embedded-graphics",
  "embedded-text",
+ "heapless",
+ "u8g2-fonts",
 ]
 
 [[package]]
@@ -1353,6 +1356,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c53bd76579dcab4b69ffe77c895b8dffa4a9b3273c0a5105afc4d3768a5064ed"
 dependencies = [
+ "embedded-graphics",
  "embedded-graphics-core",
 ]
 
