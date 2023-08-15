@@ -1,4 +1,6 @@
-# pinetime-embassy
+# Watchful
+
+Real Time Async Enterprise Watch OS written in Rust!
 
 Firmware for Pinetime based on [Embassy](https://embassy.dev).
 
@@ -7,6 +9,8 @@ TODO:
 * [x] Implement Nordic DFU protocol (version supported by Gadgetbridge and SDK 15.x) (moved to [nrf-dfu-target](https://crates.io/crates/nrf-dfu-target) crate)
 * [x] Synchronize watch with phone
 * [x] Use external flash for firmware and persistence
+* [x] Update firmware over DFU and validate in UI
+* [ ]
 * [ ] Support swapping to/from Inifinitime + MCUBoot
 * [ ] Support installing from Infinitime 'factory firmware'
 * [ ] Show clock in view mode

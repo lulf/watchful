@@ -1,7 +1,7 @@
 [workspace]
 members = [
-  "application",
-  "bootloader"
+  "app",
+  "boot"
 ]
 
 [patch.crates-io]

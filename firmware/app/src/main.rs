@@ -29,10 +29,10 @@ use nrf_softdevice::ble::gatt_server::NotifyValueError;
 use nrf_softdevice::ble::{gatt_client, gatt_server, peripheral, Connection};
 use nrf_softdevice::{raw, Softdevice};
 use pinetime_flash::XtFlash;
-use pinetime_ui::{FirmwareDetails, FirmwareView, MenuChoice, MenuView};
 use static_cell::StaticCell;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::{fonts, FontRenderer};
+use watchful_ui::{FirmwareDetails, FirmwareView, MenuChoice, MenuView, WatchView};
 use {defmt_rtt as _, panic_probe as _};
 
 mod clock;
@@ -66,9 +66,10 @@ type Display = mipidsi::Display<
 fn firmware_details(validated: bool) -> FirmwareDetails {
     const CARGO_NAME: &str = env!("CARGO_PKG_NAME");
     const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
-    const COMMIT: Option<&str> = option_env!("GIT_SHA");
+    const COMMIT: &str = env!("VERGEN_GIT_SHA")[..7];
+    const BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
 
-    FirmwareDetails::new(CARGO_NAME, CARGO_VERSION, COMMIT, validated)
+    FirmwareDetails::new(CARGO_NAME, CARGO_VERSION, COMMIT, BUILD_TIMESTAMP, validated)
 }
 
 #[embassy_executor::main]
@@ -164,16 +165,28 @@ async fn main(s: Spawner) {
                 // select(wait_for_button, wait_for_touch, timeout)
             }
             WatchState::ViewTime => {
-                display.clear(Rgb::BLACK).unwrap();
-                display_time(&mut display).await;
-
-                match select(Timer::after(Duration::from_secs(5)), btn.wait_for_any_edge()).await {
-                    Either::First(_) => {
-                        state = WatchState::Idle;
-                    }
-                    Either::Second(_) => {
-                        if btn.is_high() {
-                            state = WatchState::ViewMenu(MenuView::main());
+                WatchView::new(&CLOCK.get()).draw(&mut display).unwrap();
+                let timeout = Timer::after(Duration::from_secs(10));
+                loop {
+                    match select3(
+                        Timer::after(Duration::from_secs(1)),
+                        &mut timeout,
+                        btn.wait_for_any_edge(),
+                    )
+                    .await
+                    {
+                        Either3::First(_) => {
+                            WatchView::new(&CLOCK.get()).draw(&mut display).unwrap();
+                        }
+                        Either3::Second(_) => {
+                            state = WatchState::Idle;
+                            break;
+                        }
+                        Either3::Third(_) => {
+                            if btn.is_high() {
+                                state = WatchState::ViewMenu(MenuView::main());
+                                break;
+                            }
                         }
                     }
                 }

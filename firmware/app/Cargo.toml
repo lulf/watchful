@@ -1,6 +1,6 @@
 [package]
 edition = "2021"
-name = "pinetime-embassy"
+name = "watchful"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
 
@@ -20,7 +20,7 @@ embedded-hal = "=1.0.0-alpha.11"
 embedded-hal-02 = { package = "embedded-hal", version = "0.2.6" }
 nrf-dfu-target = { version = "0.1.0", features = ["defmt"] }
 pinetime-flash = { version = "0.1.0", path = "../../pinetime-flash", features = ["defmt"] }
-pinetime-ui = { version = "0.1.0", path = "../../pinetime-ui", features = ["defmt"] }
+watchful-ui = { version = "0.1.0", path = "../../watchful-ui", features = ["defmt"] }
 cst816s = "0.1.4"
 
 nrf-softdevice = { version = "0.1.0", features = ["nightly", "defmt", "nrf52832", "s132", "ble-gatt-server", "ble-gatt-client", "ble-peripheral", "critical-section-impl", "evt-max-size-256"] }
@@ -42,3 +42,7 @@ display-interface-spi = "0.4.1"
 u8g2-fonts = "0.3.0"
 time = { version = "0.3", default-features = false }
 byte-slice-cast = { version = "1.2.0", default-features = false }
+
+[build-dependencies]
+chrono = "0.4"
+vergen = { version = "8", features = ["build", "git"] }

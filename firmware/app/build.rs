@@ -21,6 +21,11 @@ fn main() {
         .unwrap()
         .write_all(include_bytes!("memory.x"))
         .unwrap();
+
+    File::create(out.join("build.timestamp"))
+        .unwrap()
+        .write_all(chrono::Utc::now().to_rfc3339().as_bytes())
+        .unwrap();
     println!("cargo:rustc-link-search={}", out.display());
 
     // By default, Cargo will re-run a build script whenever
