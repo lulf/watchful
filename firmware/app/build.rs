@@ -13,6 +13,8 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
+use vergen::EmitBuilder;
+
 fn main() {
     // Put `memory.x` in our output directory and ensure it's
     // on the linker search path.
@@ -22,10 +24,6 @@ fn main() {
         .write_all(include_bytes!("memory.x"))
         .unwrap();
 
-    File::create(out.join("build.timestamp"))
-        .unwrap()
-        .write_all(chrono::Utc::now().to_rfc3339().as_bytes())
-        .unwrap();
     println!("cargo:rustc-link-search={}", out.display());
 
     // By default, Cargo will re-run a build script whenever
@@ -37,4 +35,6 @@ fn main() {
     println!("cargo:rustc-link-arg-bins=--nmagic");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
     println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
+
+    EmitBuilder::builder().all_build().all_git().emit().unwrap();
 }

@@ -9,7 +9,7 @@ use embassy_boot::State as FwState;
 use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareState as FirmwareState, FirmwareUpdaterConfig};
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_executor::Spawner;
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::interrupt::Priority;
 use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, TWISPI0};
@@ -30,8 +30,6 @@ use nrf_softdevice::ble::{gatt_client, gatt_server, peripheral, Connection};
 use nrf_softdevice::{raw, Softdevice};
 use pinetime_flash::XtFlash;
 use static_cell::StaticCell;
-use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
-use u8g2_fonts::{fonts, FontRenderer};
 use watchful_ui::{FirmwareDetails, FirmwareView, MenuChoice, MenuView, WatchView};
 use {defmt_rtt as _, panic_probe as _};
 
@@ -66,7 +64,7 @@ type Display = mipidsi::Display<
 fn firmware_details(validated: bool) -> FirmwareDetails {
     const CARGO_NAME: &str = env!("CARGO_PKG_NAME");
     const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
-    const COMMIT: &str = env!("VERGEN_GIT_SHA")[..7];
+    const COMMIT: &str = env!("VERGEN_GIT_SHA");
     const BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
 
     FirmwareDetails::new(CARGO_NAME, CARGO_VERSION, COMMIT, BUILD_TIMESTAMP, validated)
@@ -143,6 +141,7 @@ async fn main(s: Spawner) {
     // create the ILI9486 display driver from the display interface and optional RST pin
     let mut display = mipidsi::Builder::st7789(di)
         .with_display_size(240, 240)
+        .with_invert_colors(mipidsi::ColorInversion::Inverted)
         .init(&mut Delay, Some(rst))
         .unwrap();
 
@@ -156,7 +155,7 @@ async fn main(s: Spawner) {
         match state {
             WatchState::Idle => {
                 // TODO: Power save
-                display.clear(Rgb::WHITE).unwrap();
+                display.clear(Rgb::BLACK).unwrap();
                 btn.wait_for_any_edge().await;
                 if btn.is_high() {
                     state = WatchState::ViewTime;
@@ -165,8 +164,8 @@ async fn main(s: Spawner) {
                 // select(wait_for_button, wait_for_touch, timeout)
             }
             WatchState::ViewTime => {
-                WatchView::new(&CLOCK.get()).draw(&mut display).unwrap();
-                let timeout = Timer::after(Duration::from_secs(10));
+                WatchView::new(CLOCK.get()).draw(&mut display).unwrap();
+                let mut timeout = Timer::after(Duration::from_secs(10));
                 loop {
                     match select3(
                         Timer::after(Duration::from_secs(1)),
@@ -176,7 +175,7 @@ async fn main(s: Spawner) {
                     .await
                     {
                         Either3::First(_) => {
-                            WatchView::new(&CLOCK.get()).draw(&mut display).unwrap();
+                            WatchView::new(CLOCK.get()).draw(&mut display).unwrap();
                         }
                         Either3::Second(_) => {
                             state = WatchState::Idle;
@@ -296,26 +295,6 @@ pub enum WatchState<'a> {
     ViewFirmware(FirmwareView),
     //  FindPhone,
     //  Workout,
-}
-
-async fn display_time(display: &mut Display) {
-    //mipidsi::Display<DI, MODEL, RST>) {
-    let current_time = CLOCK.get();
-    let mut text: heapless::String<16> = heapless::String::new();
-    use core::fmt::Write;
-    write!(text, "{:02}:{:02}", current_time.hour(), current_time.minute()).unwrap();
-    //write!(text, "FOO").unwrap();
-    let font = FontRenderer::new::<fonts::u8g2_font_spleen32x64_mu>();
-
-    font.render_aligned(
-        text.as_ref(),
-        display.bounding_box().center() + Point::new(0, 0),
-        VerticalPosition::Baseline,
-        HorizontalAlignment::Center,
-        FontColor::Transparent(Rgb::YELLOW),
-        display,
-    )
-    .unwrap();
 }
 
 #[nrf_softdevice::gatt_service(uuid = "FE59")]

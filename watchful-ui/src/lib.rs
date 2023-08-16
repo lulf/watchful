@@ -82,11 +82,11 @@ impl FirmwareDetails {
 }
 
 pub struct WatchView {
-    time: time::OffsetDateTime,
+    time: time::PrimitiveDateTime,
 }
 
 impl WatchView {
-    pub fn new(time: time::OffsetDateTime) -> Self {
+    pub fn new(time: time::PrimitiveDateTime) -> Self {
         Self { time }
     }
     pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {

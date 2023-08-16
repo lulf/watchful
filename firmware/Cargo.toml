@@ -4,6 +4,8 @@ members = [
   "boot"
 ]
 
+resolver = "2"
+
 [patch.crates-io]
 #embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
 #embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "cf278ea1b6ce29b7908a9f93de4cbdfd7d0dea37" }
