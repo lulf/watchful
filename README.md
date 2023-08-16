@@ -10,18 +10,12 @@ TODO:
 * [x] Synchronize watch with phone
 * [x] Use external flash for firmware and persistence
 * [x] Update firmware over DFU and validate in UI
-* [ ]
 * [ ] Support swapping to/from Inifinitime + MCUBoot
 * [ ] Support installing from Infinitime 'factory firmware'
-* [ ] Show clock in view mode
+* [x] Show clock in view mode
+* [x] View for viewing and validating firmware
 * [ ] Low power in idle mode
 * [ ] Menu for starting workout or finding phone
 * [ ] Workout tracking mode
 * [ ] Record and export of workout data
 * [ ] Finding phone mode 
-
-
-Resources:
-* Updating to watch-os: https://www.youtube.com/watch?v=lPasAt1LJmo
-* Bootloading process: https://github.com/InfiniTimeOrg/pinetime-mcuboot-bootloader
-* Memory of factoru: https://wiki.pine64.org/wiki/PineTime_bootloader_improvements
