@@ -2,7 +2,7 @@ MEMORY
 {
   /* NOTE 1 K = 1 KiBi = 1024 bytes */
   MBR                               : ORIGIN = 0x00000000, LENGTH = 4K
-  SOFTDEVICE                        : ORIGIN = 0x00001000, LENGTH = 152K
+  SOFTDEVICE                        : ORIGIN = 0x00001000, LENGTH = 148K
   FLASH                             : ORIGIN = 0x00026000, LENGTH = 324K
   BOOTLOADER                        : ORIGIN = 0x00077000, LENGTH = 32K
 

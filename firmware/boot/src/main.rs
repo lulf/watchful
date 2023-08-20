@@ -35,7 +35,7 @@ fn main() -> ! {
     // }
 
     let mut wdt_config = wdt::Config::default();
-    wdt_config.timeout_ticks = 32768 * 5; // timeout seconds
+    wdt_config.timeout_ticks = 32768 * 20; // timeout seconds
     wdt_config.run_during_sleep = true;
     wdt_config.run_during_debug_halt = false;
 
