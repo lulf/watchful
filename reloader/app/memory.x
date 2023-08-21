@@ -21,11 +21,3 @@ __bootloader_dfu_start = ORIGIN(DFU);
 __bootloader_dfu_end = ORIGIN(DFU) + LENGTH(DFU);
 
 __bootloader_start = ORIGIN(BOOTLOADER);
-
-SECTIONS
-{
-  .uicr_bootloader_start_address :
-  {
-    LONG(__bootloader_start)
-  } > uicr_bootloader_start_address
-}

@@ -1467,6 +1467,7 @@ dependencies = [
  "embedded-graphics",
  "embedded-text",
  "heapless",
+ "micromath",
  "time",
  "u8g2-fonts",
 ]

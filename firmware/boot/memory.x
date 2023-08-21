@@ -24,7 +24,6 @@ __bootloader_dfu_end = ORIGIN(DFU) + LENGTH(DFU);
 
 __bootloader_start = ORIGIN(FLASH);
 
-/*
 SECTIONS
 {
   .uicr_bootloader_start_address :
@@ -32,4 +31,3 @@ SECTIONS
     LONG(__bootloader_start)
   } > uicr_bootloader_start_address
 }
-*/

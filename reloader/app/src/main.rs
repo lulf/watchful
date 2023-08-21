@@ -15,6 +15,7 @@ use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::interrupt::Priority;
 use embassy_nrf::nvmc::Nvmc;
+use embassy_nrf::pac::NVMC;
 use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
@@ -39,14 +40,16 @@ static BOOTLOADER: &[u8] = include_bytes!("../bootloader.bin");
 static APPLICATION: &[u8] = include_bytes!("../application.bin");
 
 const BOOTLOADER_DEST: u32 = 0x00077000;
+const BOOTLOADER_DEST_BE: u32 = 0x00700700;
 const APPLICATION_DEST: u32 = 0x00000000; // External flash
 const SOFTDEVICE_DEST: u32 = 0x00000000;
 const BOOTLOADER_STATE: u32 = 0x003FF000;
 const UICR_ADDRESS: u32 = 0x10001014;
 
-/*#[link_section = ".uicr_bootloader_start_address"]
-#[no_mangle]
-pub static UICR_BOOTLOADER_START_ADDRESS: u32 = BOOTLOADER_DEST;*/
+//#[link_section = ".uicr_bootloader_start_address"]
+//#[no_mangle]
+//pub static UICR_BOOTLOADER_START_ADDRESS: u32;
+//= BOOTLOADER_DEST;
 
 #[embassy_executor::main]
 async fn main(s: Spawner) {
@@ -87,10 +90,21 @@ async fn main(s: Spawner) {
 
     defmt::info!("Flashed bootloader");
 
-    //    internal_flash.write(UICR_ADDRESS, BOOTLOADER_DEST).unwrap();
-    //   unsafe { (*pac::UICR::ptr()).nrffw[0].write(|f| f.bits(BOOTLOADER_DEST)) };
+    unsafe {
+        let uicr = UICR_ADDRESS as *mut u32;
 
-    // defmt::info!("Wrote UICR");
+        // Enable NVMC so we can write UICR
+        let nvmc = unsafe { &*pac::NVMC::ptr() };
+        nvmc.config.write(|w| w.wen().wen());
+        while nvmc.ready.read().ready().is_busy() {}
+        core::ptr::write_volatile(uicr, BOOTLOADER_DEST);
+        nvmc.config.write(|w| w.wen().ren());
+        while nvmc.ready.read().ready().is_busy() {}
+
+        // Read back to confirm
+        let val = core::ptr::read_volatile(uicr);
+        defmt::info!("Wrote UICR: {:x}", val);
+    }
 
     let mtx = Mutex::new(RefCell::new(external_flash));
     let part: BlockingPartition<NoopRawMutex, _> = BlockingPartition::new(&mtx, BOOTLOADER_STATE, 4096);
