@@ -1,7 +1,6 @@
 #![no_std]
 
-use core::fmt::Write as _;
-
+use ::core::fmt::Write as _;
 use embedded_graphics::pixelcolor::Rgb565 as Rgb;
 use embedded_graphics::prelude::{DrawTarget, *};
 use embedded_graphics::primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle};
@@ -9,6 +8,8 @@ use embedded_graphics::text::{Text, TextStyleBuilder};
 use embedded_text::style::TextBoxStyleBuilder;
 use embedded_text::TextBox;
 use u8g2_fonts::{fonts, U8g2TextStyle};
+
+mod core;
 
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 240;
@@ -98,7 +99,6 @@ impl WatchView {
             .build();
 
         let mut text: heapless::String<16> = heapless::String::new();
-        use core::fmt::Write;
         write!(text, "{:02}\n{:02}", self.time.hour(), self.time.minute()).unwrap();
         Text::with_text_style(&text, display.bounding_box().center(), character_style, text_style).draw(display)?;
         Ok(())
