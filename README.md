@@ -6,6 +6,8 @@ Real Time Async Enterprise Watch OS written in Rust!
 
 Firmware for Pinetime based on [Embassy](https://embassy.dev).
 
+![PineTime on my arm running Watchful](image.png)
+
 TODO:
 
 * [x] Implement Nordic DFU protocol (version supported by Gadgetbridge and SDK 15.x) (moved to [nrf-dfu-target](https://crates.io/crates/nrf-dfu-target) crate)
