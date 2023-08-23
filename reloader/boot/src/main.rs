@@ -2,20 +2,20 @@
 #![no_main]
 
 use cortex_m_rt::{entry, exception};
+use embassy_nrf as _;
 
 #[entry]
 fn main() -> ! {
-    let _p = embassy_nrf::init(Default::default());
-    extern "C" {
-        static __reloader_start: u32;
-    }
-
     unsafe {
+        extern "C" {
+            static __reloader_start: u32;
+        }
         let start = &__reloader_start as *const u32 as u32;
 
         let mut p = cortex_m::Peripherals::steal();
         p.SCB.invalidate_icache();
         p.SCB.vtor.write(start);
+
         cortex_m::asm::bootload(start as *const u32)
     }
 }

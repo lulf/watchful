@@ -9,7 +9,7 @@ use embedded_text::style::TextBoxStyleBuilder;
 use embedded_text::TextBox;
 use u8g2_fonts::{fonts, U8g2TextStyle};
 
-mod core;
+// mod core;
 
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 240;

@@ -10,8 +10,6 @@ MEMORY
   BOOTLOADER_STATE                  : ORIGIN = 0x003FF000, LENGTH = 4K
 
   RAM                               : ORIGIN = 0x2000BAF0, LENGTH = 17680
-
-  uicr_bootloader_start_address (r) : ORIGIN = 0x10001014, LENGTH = 0x4
 }
 
 __bootloader_state_start = ORIGIN(BOOTLOADER_STATE);

@@ -1,6 +1,10 @@
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::{DrawTarget, Point};
+use embedded_graphics::primitives::{Primitive, PrimitiveStyle, Rectangle, Styled};
+use embedded_graphics::text::{Text, TextStyleBuilder};
+use embedded_graphics::Drawable as _;
 use micromath::F32Ext;
+use u8g2_fonts::U8g2TextStyle;
 
 type COLOR = Rgb565;
 
@@ -30,11 +34,11 @@ pub trait Component {
     fn on_render<D: DrawTarget<Color = COLOR>>(&self, display: &mut D) -> Result<(), D::Error> {
         Ok(())
     }
+
     fn on_event(&mut self, event: InputEvent) {}
 
     fn dispatch(&mut self, event: InputEvent) {
         let InputEvent::Touch(gesture) = event;
-
         if let Some(shape) = self.shape() {
             if shape.contains(gesture.point()) {
                 self.on_event(event);
@@ -76,26 +80,55 @@ impl TouchGesture {
     }
 }
 
-pub struct Button<F>
+pub struct Button<'a, F>
 where
     F: FnMut(ButtonEvent),
 {
+    container: Rectangle,
+    text: &'a str,
     action: F,
+    button_style: PrimitiveStyle<COLOR>,
+    text_style: U8g2TextStyle<COLOR>,
 }
 
-impl<F> Button<F>
+impl<'a, F> Button<'a, F>
 where
     F: Fn(ButtonEvent),
 {
-    pub fn new(action: F) -> Self {
-        Self { action }
+    pub fn new(
+        container: Rectangle,
+        text: &'a str,
+        action: F,
+        button_style: PrimitiveStyle<COLOR>,
+        text_style: U8g2TextStyle<COLOR>,
+    ) -> Self {
+        Self {
+            container,
+            text,
+            action,
+            button_style,
+            text_style,
+        }
     }
 }
 
-impl<F> Component for Button<F>
+impl<'a, F> Component for Button<'a, F>
 where
     F: Fn(ButtonEvent),
 {
+    fn on_render<D: DrawTarget<Color = COLOR>>(&self, display: &mut D) -> Result<(), D::Error> {
+        self.container.into_styled(self.button_style).draw(display)?;
+        Text::with_text_style(
+            self.text,
+            self.container.center(),
+            self.text_style.clone(),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .build(),
+        )
+        .draw(display)?;
+        Ok(())
+    }
     fn on_event(&mut self, event: InputEvent) {
         if let InputEvent::Touch(TouchGesture::SingleTap(_)) = event {
             (self.action)(ButtonEvent::Pressed);

@@ -29,6 +29,9 @@ fn main() {
     // here, we ensure the build script is only re-run when
     // `memory.x` is changed.
     println!("cargo:rerun-if-changed=memory.x");
+    println!("cargo:rerun-if-changed=application.bin");
+    println!("cargo:rerun-if-changed=bootloader.bin");
+    println!("cargo:rerun-if-changed=softdevice.bin");
 
     println!("cargo:rustc-link-arg-bins=--nmagic");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");

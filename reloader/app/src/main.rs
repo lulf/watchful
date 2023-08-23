@@ -10,16 +10,16 @@ use embassy_boot::State as FwState;
 use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareState as FirmwareState, FirmwareUpdaterConfig};
 use embassy_embedded_hal::flash::partition::{self, BlockingPartition};
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
-use embassy_executor::Spawner;
+use embassy_executor::{InterruptExecutor, Spawner};
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
-use embassy_nrf::interrupt::Priority;
+use embassy_nrf::interrupt::{InterruptExt, Priority};
 use embassy_nrf::nvmc::Nvmc;
 use embassy_nrf::pac::NVMC;
 use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
-use embassy_nrf::{bind_interrupts, pac, peripherals, spim, twim};
+use embassy_nrf::{bind_interrupts, interrupt, pac, peripherals, spim, twim};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::{Mutex, Mutex as BMutex};
 use embassy_time::{Delay, Duration, Timer};
@@ -40,23 +40,31 @@ static BOOTLOADER: &[u8] = include_bytes!("../bootloader.bin");
 static APPLICATION: &[u8] = include_bytes!("../application.bin");
 
 const BOOTLOADER_DEST: u32 = 0x00077000;
-const BOOTLOADER_DEST_BE: u32 = 0x00700700;
 const APPLICATION_DEST: u32 = 0x00000000; // External flash
 const SOFTDEVICE_DEST: u32 = 0x00000000;
 const BOOTLOADER_STATE: u32 = 0x003FF000;
 const UICR_ADDRESS: u32 = 0x10001014;
 
-//#[link_section = ".uicr_bootloader_start_address"]
-//#[no_mangle]
-//pub static UICR_BOOTLOADER_START_ADDRESS: u32;
-//= BOOTLOADER_DEST;
+#[interrupt]
+unsafe fn SWI0_EGU0() {
+    EXECUTOR_MED.on_interrupt()
+}
+
+static EXECUTOR_MED: InterruptExecutor = InterruptExecutor::new();
 
 #[embassy_executor::main]
 async fn main(s: Spawner) {
     let p = embassy_nrf::init(Default::default());
 
+    // Medium-priority executor: SWI0_EGU0, priority level 7
+    interrupt::SWI0_EGU0.set_priority(Priority::P6);
+    let spawner = EXECUTOR_MED.start(interrupt::SWI0_EGU0);
+    spawner.spawn(watchdog_task()).unwrap();
+
     defmt::info!("Hello! Starting reloader");
-    Timer::after(Duration::from_secs(5)).await;
+    let mut led = Output::new(p.P0_22, Level::Low, OutputDrive::Standard);
+
+    Timer::after(Duration::from_secs(1)).await;
 
     let mut default_config = spim::Config::default();
     default_config.frequency = spim::Frequency::M8;
@@ -69,24 +77,31 @@ async fn main(s: Spawner) {
     let flash_cs = Output::new(p.P0_05, Level::High, OutputDrive::Standard);
     let flash_spi = SpiDevice::new(&spi_bus, flash_cs);
     let mut external_flash = XtFlash::new(flash_spi).unwrap();
-    external_flash.erase(APPLICATION_DEST, 328 * 1024).unwrap();
+    external_flash.erase(0, 4 * 1024 * 1024).unwrap();
+    Timer::after(Duration::from_secs(1)).await;
+
     external_flash.write(APPLICATION_DEST, APPLICATION).unwrap();
+    Timer::after(Duration::from_secs(1)).await;
 
     defmt::info!("Flashed application");
     let mut internal_flash = Nvmc::new(p.NVMC);
 
     internal_flash.erase(0, 0x26000).unwrap();
+    Timer::after(Duration::from_secs(1)).await;
     defmt::info!("Erased softdevice section");
 
-    internal_flash.write(0, SOFTDEVICE).unwrap();
+    internal_flash.write(SOFTDEVICE_DEST, SOFTDEVICE).unwrap();
+    Timer::after(Duration::from_secs(1)).await;
 
     defmt::info!("Flashed softdevice, erasing bootloader at {:x}", BOOTLOADER_DEST);
 
     internal_flash.erase(BOOTLOADER_DEST, BOOTLOADER_DEST + 32768).unwrap();
+    Timer::after(Duration::from_secs(1)).await;
 
     defmt::info!("Erased bootloader, flashing it (size {})", BOOTLOADER.len());
 
     internal_flash.write(BOOTLOADER_DEST, BOOTLOADER).unwrap();
+    Timer::after(Duration::from_secs(1)).await;
 
     defmt::info!("Flashed bootloader");
 
@@ -120,7 +135,10 @@ async fn main(s: Spawner) {
             defmt::info!("Error marking firmware as updated: {:?}", defmt::Debug2Format(&e));
 
             loop {
-                Timer::after(Duration::from_secs(1)).await
+                led.set_low();
+                Timer::after(Duration::from_millis(100)).await;
+                led.set_high();
+                Timer::after(Duration::from_millis(100)).await;
             }
         }
     }
@@ -129,4 +147,15 @@ async fn main(s: Spawner) {
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     cortex_m::asm::udf();
+}
+
+// Keeps our system alive
+#[embassy_executor::task]
+async fn watchdog_task() {
+    let mut handle = unsafe { embassy_nrf::wdt::WatchdogHandle::steal(0) };
+    loop {
+        handle.pet();
+        Timer::after(Duration::from_secs(2)).await;
+        defmt::info!("PET");
+    }
 }

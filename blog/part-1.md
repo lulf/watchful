@@ -1,4 +1,4 @@
-# Async Rust on the Pinetime - Part 1
+# Rust on my Pinetime 
 
 In this blog post series, we'll go through the development of a complex Embassy application for a real world use case (Well, almost real world!). One of the most common questions I've seen asked in the Embassy chat is "How do I get started with an Embassy project?". The series will cover things such as:
 
@@ -8,7 +8,7 @@ In this blog post series, we'll go through the development of a complex Embassy 
 * Writing an async driver
 * Driving multiple SPI devices on the same bus
 
-The first part will focus on the basics.
+The first part will focus on the basics of creating a standalone Embassy project.
 
 ## Background
 
@@ -21,9 +21,9 @@ When I think of it, probably the last reason is the only valid one.
 
 ## The Hardware
 
-The good news is that the PineTime uses the Nordic nRF52832, which is probably one of the best supported MCUs in Embassy. The bad news is that the best BLE support for Rust still relies on the [Softdevice](), which is in maintenance mode. Hopefully, new projects like [Bleps]() will gain traction.
+The good news is that the PineTime uses the Nordic nRF52832, which is probably one of the best supported MCUs in Embassy. The bad news is that the best BLE support for Rust still relies on the [Softdevice](https://infocenter.nordicsemi.com/topic/struct_nrf52/struct/nrf52_softdevices.html), which is in maintenance mode. Hopefully, new projects like [Bleps](https://github.com/bjoernQ/bleps) will gain traction.
 
-As for the rest of the peripherals, the [Display]() is already supported with `embedded-graphics`. The external flash required writing an async driver (which I'll cover in the next blog post).
+As for the rest of the peripherals, the [Display](https://crates.io/crates/st7789) is already supported with `embedded-graphics`. The external flash required writing an async driver (which I'll cover in the next blog post).
 
 ## The Goal
 
@@ -40,7 +40,7 @@ There are also a few other requirements:
 * Can be installed from InfiniTime (without bricking the device!).
 * (Optional) Can revert back to the InfiniTime firmware.
 
-## Starting the project
+## Getting started
 
 When starting out a new Embassy project, I often base the scaffolding on a previous project. However, I've found that the Embassy examples are good to look at for dependencies and features required in Cargo.toml, as well as the main application.
 
@@ -63,43 +63,87 @@ It can be hard to select which Embassy revision to use, but generally starting f
 
 Since this particular project also requires a bootloader (embassy-boot, for DFU), and a reflasher tool (I'll come back to what that is for), I'm keeping the .cargo in the workspace folder, and the `[patch.crates-io]` section in the workspace `Cargo.toml`. This just makes it quicker to update, but there is a drawback: cargo features could potentially conflict, in which case we might change to not using workspaces at a later point.
 
-Since I know I'm going to need DFU, I'll lay everything out with that in mind from the beginning. This is a personal taste, but I find it easier to debug bootloading and firmware updates while the application is somewhat manageable.
+Since I know I'm going to need DFU, I'll lay everything out with that in mind from the beginning. This is a personal taste, but I find it easier to debug bootloading and firmware updates while the application is somewhat small.
 
-All in all, the project has the following structure at the time of writing:
+And once the bootloading and DFU parts are written, I get to test it every time I update with some new feature while development, hopefully uncovering real bugs.
 
 ```
-firmware/.cargo/config.toml
-firmware/Cargo.toml
+firmware/ # Embassy firmware
+firmware/app/  # Application part
+firmware/boot/ # Bootloader part
 
-firmware/app/Cargo.toml
-firmware/app/memory.x
-firmware/app/build.rs
-firmware/app/src/main.rs
+reloader/ # Firmware that swaps InfiniTime with Embassy
+reloader/app/
+reloader/boot/
 
-firmware/bootloader/Cargo.toml
-firmware/bootloader/memory.x
-firmware/bootloader/build.rs
-firmware/bootloader/src/main.rs
-
-pinetime-flash/Cargo.toml
-pinetime-flash/src/lib.rs
+pinetime-flash/ # Driver for external Flash
+watchful-ui/ # The UI of the watch firmware which can also run on a simulator
 ```
 
-Note the `memory.x`linker scripts. It is important that regions in the app and bootloader linker scripts match! The `build.rs` files are necessary to make the linker pick up additional arguments (such as the linker script).
+Originally I ended up with one additional crate, `nrf-dfu`, which was later moved. Keeping utilities and additional crates in the same repo is useful during development and also allows for creating unit tests that doesn't require running on the device. Once the crate is generally useful, move it out and let it live its own life in the true spirit of open source!
 
-I also ended up with one additional crate. Keeping utilities and additional crates in the same repo is useful during development and also allows for creating unit tests that doesn't require running on the device. Once the crate is generally useful, move it out and let it live its own life in the true spirit of open source!
 
 ## Development tools
 
-* `cargo-flash`
+In general `probe-rs` is all you need for flashing and debugging. I use:
 
-Generally, I start with flashing the bootloader first:
-
-* cargo flash --manifest-path firmware/bootloader/Cargo.toml --chip nRF52832_xxAA
-
-## Summary
+* `probe-rs run --release --chip nRF52832_xxAA` to run the application with RTT logging.
+* `cargo flash --release --chip nRF52832_xxAA` to run the application without attaching RTT.
 
 
-## BLE
+## Firmware
 
-The excellent [nrf-softdevice]() crate is well supported to use with Embassy, even if the blob is no longer developed. Since I've made several BLE applications with Embassy for the microbit, this part was the easiest. However, I 
+The firmware is the main part of the application. It implements the main features:
+
+* User interface
+* Touch gestures
+* BLE connectivity
+* DFU
+* Time synchronization
+* ...
+
+### Flash driver
+
+At the time of development, the flash chip in the PineTime did not have any Rust driver I could use (That I was able to find). Luckily, the PineTime Wiki had a link to [the datasheet](), and that got me going.
+
+If you need to write code that uses flash in embedded Rust, consider relying on the traits from the `embedded-storage` and `embedded-storage-async `crates, which define an API that seems to map well to most flash implementations.
+
+By doing so, your driver will be able to work with Embassy but also any other bare metal Rust implementation.
+
+## The Reloader
+
+Ok, great! I have a firmware that is working, can do DFU over BLE and swap firmwares using embassy-boot. It works great on my devkit. Now, how do I get this on my sealed PineTime with no debug probe attached? That's what the reloader is for.
+The reloader is a special firmware that can be loaded with MCUBoot, with the purpose of flashing the embassy bootloader and firmware to replace both MCUBoot and InfiniTime. But it's a one shot chance, if it fails during the process, the device might get bricked. Sounds risky! On positive side, the development kit allowed testing this thoroughly before attempting to reflash my watch.
+
+The reloader includes the main bootloader, application and nRF softdevice and is tasked with flashing each of these to the appropriate location: 
+
+* The softdevice is written at the start of the internal flash
+* The bootloader is written to the later part of the internal flash
+* The application is written to the DFU partition in the external flash
+* Write the address of the bootloader in the UICR flash region
+* Mark the bootloader state as requiring a firmware swap
+
+Once the reloader has run, it will reset and the bootloader will copy the application firmware from the external flash into the internal flash in the active partition.
+
+You might wonder why the reloader has a bootloader. If you look at the linker scripts, you can see that the app portion of the reloader is located at a higher flash address. The reason for that is that the reloader will need to overwrite both the MCUBoot and the application sections of the flash, and therefor must be located in a 'safe' area.
+
+To build the reloader, first a hex file of both the boot and app is made:
+
+```
+cd app && cargo objcopy --release -- -O ihex app.hex
+cd boot && cargo objcopy --release -- -O ihex boot.hex
+mergehex -m boot/boot.hex app/app.hex -o combined.bin
+```
+
+Then, the `imgtool.py` tool from MCUBoot is used to create an "image" that can be loaded by MCUBoot:
+
+```
+imgtool.py create --align 4 --version 1.0.0 --header-size 32 --slot-size 475136 --pad-header combined.bin watchful-reloader-image.bin
+```
+
+The final step is to create a nRF DFU package with the image: 
+
+```
+adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application watchful-reloader-image.bin watchful-reloader-dfu.zip
+```
+
