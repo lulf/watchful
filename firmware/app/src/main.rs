@@ -165,10 +165,10 @@ async fn main(s: Spawner) {
             }
             WatchState::ViewTime => {
                 WatchView::new(CLOCK.get()).draw(&mut display).unwrap();
-                let mut timeout = Timer::after(Duration::from_secs(10));
+                let mut timeout = Timer::after(Duration::from_secs(20));
                 loop {
                     match select3(
-                        Timer::after(Duration::from_secs(1)),
+                        Timer::after(Duration::from_secs(10)),
                         &mut timeout,
                         btn.wait_for_any_edge(),
                     )
