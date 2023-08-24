@@ -16,6 +16,12 @@ fn main() -> Result<(), core::convert::Infallible> {
 
     Window::new("Main", &output_settings).show_static(&display);
 
+    let view = MenuView::settings();
+    view.draw(&mut display)?;
+    let output_settings = OutputSettingsBuilder::new().scale(1).build();
+
+    Window::new("Settings", &output_settings).show_static(&display);
+
     let mut display = SimulatorDisplay::<Rgb>::new(Size::new(240, 240));
 
     let view = MenuView::firmware_settings(FirmwareDetails::new(

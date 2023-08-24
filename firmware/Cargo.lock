@@ -585,6 +585,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-layout"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b08725b7f9021377a7f84f14089b4980a30b06c5e424288b34482f17cf513369"
+dependencies = [
+ "embedded-graphics",
+ "embedded-layout-macros",
+]
+
+[[package]]
+name = "embedded-layout-macros"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e8e14b0fd4603445537cee01d543cff7ad00bad251d9df29dc46497e3ebbee4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.26",
+]
+
+[[package]]
 name = "embedded-storage"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1465,6 +1486,7 @@ version = "0.1.0"
 dependencies = [
  "defmt",
  "embedded-graphics",
+ "embedded-layout",
  "embedded-text",
  "heapless",
  "micromath",

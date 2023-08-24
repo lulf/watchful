@@ -5,6 +5,8 @@ use embedded_graphics::pixelcolor::Rgb565 as Rgb;
 use embedded_graphics::prelude::{DrawTarget, *};
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::{Text, TextStyleBuilder};
+use embedded_layout::layout::linear::LinearLayout;
+use embedded_layout::prelude::*;
 use embedded_text::style::TextBoxStyleBuilder;
 use embedded_text::TextBox;
 use u8g2_fonts::{fonts, U8g2TextStyle};
@@ -194,9 +196,9 @@ impl<'a> MenuItem<'a> {
 
     pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
         let line_style = PrimitiveStyleBuilder::new()
-            .stroke_color(Rgb::BLUE)
+            .stroke_color(Rgb::CSS_DARK_CYAN)
             .stroke_width(1)
-            .fill_color(Rgb::CSS_GRAY)
+            .fill_color(Rgb::CSS_DARK_CYAN)
             .build();
         let (start, end) = self.placement();
         Rectangle::with_corners(start, end)
@@ -209,7 +211,7 @@ impl<'a> MenuItem<'a> {
                 (WIDTH as i32) / 2,
                 self.idx as i32 * (HEIGHT as i32 / GRID_ITEMS as i32) + 47,
             ),
-            menu_text_style(Rgb::BLUE),
+            menu_text_style(Rgb::CSS_CORNSILK),
             TextStyleBuilder::new()
                 .alignment(embedded_graphics::text::Alignment::Center)
                 .build(),
@@ -276,7 +278,7 @@ impl FirmwareDetails {
             .paragraph_spacing(6)
             .build();
 
-        let character_style = text_text_style(Rgb::YELLOW);
+        let character_style = text_text_style(Rgb::CSS_LIGHT_CORAL);
 
         let mut info: heapless::String<256> = heapless::String::new();
         write!(
