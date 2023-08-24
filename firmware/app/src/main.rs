@@ -259,6 +259,7 @@ async fn main(s: Spawner) {
                             state = WatchState::MenuView(MenuView::firmware_settings(firmware_details(validated)));
                         }
                         MenuAction::ValidateFirmware => {
+                            info!("Validate firmware");
                             let validated = FwState::Boot == fw.get_state().expect("Failed to read firmware state");
                             if !validated {
                                 fw.mark_booted().expect("Failed to mark current firmware as good");

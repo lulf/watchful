@@ -17,7 +17,8 @@ const GRID_ITEMS: u32 = 3;
 
 fn watch_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
     //U8g2TextStyle::new(fonts::u8g2_font_unifont_t_symbols, Rgb::YELLOW)
-    U8g2TextStyle::new(fonts::u8g2_font_inb57_mn, color) //u8g2_font_logisoso58_tn, color) //u8g2_font_logisoso78_tn, color) //u8g2_font_logisoso92_tn, color) //u8g2_font_fub49_tn, color) //u8g2_font_spleen16x32_mf, color)
+    //U8g2TextStyle::new(fonts::u8g2_font_inb57_mn, color)
+    U8g2TextStyle::new(fonts::u8g2_font_logisoso58_tn, color) //u8g2_font_logisoso78_tn, color) //u8g2_font_logisoso92_tn, color) //u8g2_font_fub49_tn, color) //u8g2_font_spleen16x32_mf, color)
 }
 
 fn menu_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
@@ -59,15 +60,21 @@ impl TimeView {
     }
     pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
         display.clear(Rgb::BLACK)?;
-        let character_style = watch_text_style(Rgb::BLUE);
+        let character_style = watch_text_style(Rgb::CSS_DARK_CYAN);
         let text_style = TextStyleBuilder::new()
             .alignment(embedded_graphics::text::Alignment::Center)
             .baseline(embedded_graphics::text::Baseline::Alphabetic)
             .build();
 
         let mut text: heapless::String<16> = heapless::String::new();
-        write!(text, "{:02}\n{:02}", self.time.hour(), self.time.minute()).unwrap();
-        Text::with_text_style(&text, display.bounding_box().center(), character_style, text_style).draw(display)?;
+        write!(text, "{:02}:{:02}", self.time.hour(), self.time.minute()).unwrap();
+        let text = Text::with_text_style(&text, display.bounding_box().center(), character_style, text_style);
+        let display_area = display.bounding_box();
+        LinearLayout::vertical(Chain::new(text))
+            .with_alignment(horizontal::Center)
+            .arrange()
+            .align_to(&display_area, horizontal::Center, vertical::Center)
+            .draw(display)?;
         Ok(())
     }
 }

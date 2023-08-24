@@ -33,5 +33,11 @@ fn main() -> Result<(), core::convert::Infallible> {
     ));
     view.draw(&mut display)?;
     Window::new("Firmware", &output_settings).show_static(&display);
+
+    let mut display = SimulatorDisplay::<Rgb>::new(Size::new(240, 240));
+    let t = time::OffsetDateTime::now_utc();
+    let view = TimeView::new(time::PrimitiveDateTime::new(t.date(), t.time()));
+    view.draw(&mut display)?;
+    Window::new("Time", &output_settings).show_static(&display);
     Ok(())
 }
