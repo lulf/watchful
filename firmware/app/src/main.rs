@@ -5,12 +5,13 @@
 use core::cell::RefCell;
 
 use defmt::{info, warn};
+use defmt_rtt as _;
 use embassy_boot::State as FwState;
 use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareState as FirmwareState, FirmwareUpdaterConfig};
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, select3, Either, Either3};
-use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
+use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pin, Pull};
 use embassy_nrf::interrupt::Priority;
 use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
@@ -19,7 +20,6 @@ use embassy_nrf::{bind_interrupts, pac, peripherals, spim, twim};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BMutex;
 use embassy_time::{Delay, Duration, Timer};
-use embedded_graphics::pixelcolor::Rgb565 as Rgb;
 use embedded_graphics::prelude::*;
 use embedded_storage::nor_flash::NorFlash;
 use heapless::Vec;
@@ -28,10 +28,11 @@ use nrf_dfu_target::prelude::*;
 use nrf_softdevice::ble::gatt_server::NotifyValueError;
 use nrf_softdevice::ble::{gatt_client, gatt_server, peripheral, Connection};
 use nrf_softdevice::{raw, Softdevice};
+#[cfg(feature = "panic-probe")]
+use panic_probe as _;
 use pinetime_flash::XtFlash;
 use static_cell::StaticCell;
-use watchful_ui::{FirmwareDetails, FirmwareView, MenuChoice, MenuView, WatchView};
-use {defmt_rtt as _, panic_probe as _};
+use watchful_ui::{FirmwareDetails, MenuAction, MenuView, TimeView};
 
 mod clock;
 use crate::clock::clock;
@@ -70,6 +71,15 @@ fn firmware_details(validated: bool) -> FirmwareDetails {
     FirmwareDetails::new(CARGO_NAME, CARGO_VERSION, COMMIT, BUILD_TIMESTAMP, validated)
 }
 
+use core::panic::PanicInfo;
+
+#[cfg(not(feature = "panic-probe"))]
+#[inline(never)]
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! {
+    cortex_m::peripheral::SCB::sys_reset();
+}
+
 #[embassy_executor::main]
 async fn main(s: Spawner) {
     let mut config = embassy_nrf::config::Config::default();
@@ -103,18 +113,6 @@ async fn main(s: Spawner) {
 
     let mut btn = Input::new(p.P0_13, Pull::Down);
 
-    // Medium backlight
-    let _backlight = Output::new(p.P0_22, Level::Low, OutputDrive::Standard);
-
-    // Reset pin
-    let rst = Output::new(p.P0_26, Level::Low, OutputDrive::Standard);
-
-    // Keep low while driving display
-    let display_cs = Output::new(p.P0_25, Level::High, OutputDrive::Standard);
-
-    // Data/clock
-    let dc = Output::new(p.P0_18, Level::Low, OutputDrive::Standard);
-
     let mut default_config = spim::Config::default();
     default_config.frequency = spim::Frequency::M8;
     default_config.mode = MODE_3;
@@ -122,9 +120,6 @@ async fn main(s: Spawner) {
     let spim = spim::Spim::new(p.TWISPI0, Irqs, p.P0_02, p.P0_04, p.P0_03, default_config);
     static SPI_BUS: StaticCell<BMutex<NoopRawMutex, RefCell<Spim<'static, TWISPI0>>>> = StaticCell::new();
     let spi_bus = SPI_BUS.init(BMutex::new(RefCell::new(spim)));
-
-    // Create a DisplayInterface from SPI and DC pin.
-    let display_spi = SpiDevice::new(spi_bus, display_cs);
 
     // Create flash device
     let flash_cs = Output::new(p.P0_05, Level::High, OutputDrive::Standard);
@@ -136,6 +131,21 @@ async fn main(s: Spawner) {
     s.spawn(advertiser_task(s, sd, server, flash, "Pinetime Embassy"))
         .unwrap();
 
+    // Medium backlight
+    let backlight = Output::new(p.P0_22.degrade(), Level::Low, OutputDrive::Standard);
+
+    // Reset pin
+    let rst = Output::new(p.P0_26, Level::Low, OutputDrive::Standard);
+
+    // Keep low while driving display
+    let display_cs = Output::new(p.P0_25, Level::High, OutputDrive::Standard);
+
+    // Create a DisplayInterface from SPI and DC pin.
+    let display_spi = SpiDevice::new(spi_bus, display_cs);
+
+    // Data/clock
+    let dc = Output::new(p.P0_18, Level::Low, OutputDrive::Standard);
+
     let di = SPIDeviceInterface::new(display_spi, dc);
 
     // create the ILI9486 display driver from the display interface and optional RST pin
@@ -146,6 +156,7 @@ async fn main(s: Spawner) {
         .unwrap();
 
     display.set_orientation(mipidsi::Orientation::Portrait(false)).unwrap();
+    let mut screen = Screen::new(display, backlight);
 
     let config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
     let mut magic = AlignedBuffer([0; 1]);
@@ -154,28 +165,35 @@ async fn main(s: Spawner) {
     loop {
         match state {
             WatchState::Idle => {
-                // TODO: Power save
-                display.clear(Rgb::BLACK).unwrap();
+                defmt::info!("Idle");
+                screen.off();
                 btn.wait_for_any_edge().await;
                 if btn.is_high() {
-                    state = WatchState::ViewTime;
+                    state = WatchState::TimeView;
                 }
                 // Idle task wait for reactions
                 // select(wait_for_button, wait_for_touch, timeout)
             }
-            WatchState::ViewTime => {
-                WatchView::new(CLOCK.get()).draw(&mut display).unwrap();
-                let mut timeout = Timer::after(Duration::from_secs(20));
+            WatchState::TimeView => {
+                defmt::info!("View time");
+                screen.on();
+                let mut now = CLOCK.get();
+                TimeView::new(now).draw(screen.display()).unwrap();
+                let mut timeout = Timer::after(Duration::from_secs(10));
                 loop {
                     match select3(
-                        Timer::after(Duration::from_secs(10)),
+                        Timer::after(Duration::from_secs(1)),
                         &mut timeout,
                         btn.wait_for_any_edge(),
                     )
                     .await
                     {
                         Either3::First(_) => {
-                            WatchView::new(CLOCK.get()).draw(&mut display).unwrap();
+                            let t = CLOCK.get();
+                            if t.minute() != now.minute() {
+                                TimeView::new(t).draw(screen.display()).unwrap();
+                            }
+                            now = t;
                         }
                         Either3::Second(_) => {
                             state = WatchState::Idle;
@@ -183,15 +201,16 @@ async fn main(s: Spawner) {
                         }
                         Either3::Third(_) => {
                             if btn.is_high() {
-                                state = WatchState::ViewMenu(MenuView::main());
+                                state = WatchState::MenuView(MenuView::main());
                                 break;
                             }
                         }
                     }
                 }
             }
-            WatchState::ViewMenu(menu) => {
-                menu.draw(&mut display).unwrap();
+            WatchState::MenuView(menu) => {
+                screen.on();
+                menu.draw(screen.display()).unwrap();
 
                 match select(btn.wait_for_any_edge(), async {
                     let selected;
@@ -199,7 +218,9 @@ async fn main(s: Spawner) {
                         if let Some(evt) = touchpad.read_one_touch_event(true) {
                             if let cst816s::TouchGesture::SingleClick = evt.gesture {
                                 let touched = Point::new(evt.x, evt.y);
-                                if let Some(s) = menu.intersects(touched) {
+                                if let Some(s) = menu.on_event(watchful_ui::InputEvent::Touch(
+                                    watchful_ui::TouchGesture::SingleTap(touched),
+                                )) {
                                     selected = s;
                                     break;
                                 }
@@ -214,63 +235,40 @@ async fn main(s: Spawner) {
                 {
                     Either::First(_) => {
                         if let MenuView::Settings { .. } = menu {
-                            state = WatchState::ViewMenu(MenuView::main());
+                            state = WatchState::MenuView(MenuView::main());
+                        } else if let MenuView::Firmware { .. } = menu {
+                            state = WatchState::MenuView(MenuView::settings());
                         } else {
-                            state = WatchState::ViewTime;
+                            state = WatchState::TimeView;
                         }
                     }
                     Either::Second(selected) => match selected {
-                        MenuChoice::Workout => {
+                        MenuAction::Workout => {
                             defmt::info!("Not implemented");
-                            state = WatchState::ViewTime;
+                            state = WatchState::TimeView;
                         }
-                        MenuChoice::FindPhone => {
+                        MenuAction::FindPhone => {
                             defmt::info!("Not implemented");
-                            state = WatchState::ViewTime;
+                            state = WatchState::TimeView;
                         }
-                        MenuChoice::Settings => {
-                            state = WatchState::ViewMenu(MenuView::settings());
+                        MenuAction::Settings => {
+                            state = WatchState::MenuView(MenuView::settings());
                         }
-                        MenuChoice::Firmware => {
+                        MenuAction::FirmwareSettings => {
                             let validated = FwState::Boot == fw.get_state().expect("Failed to read firmware state");
-                            state = WatchState::ViewFirmware(FirmwareView::new(firmware_details(validated)));
+                            state = WatchState::MenuView(MenuView::firmware_settings(firmware_details(validated)));
+                        }
+                        MenuAction::ValidateFirmware => {
+                            let validated = FwState::Boot == fw.get_state().expect("Failed to read firmware state");
+                            if !validated {
+                                fw.mark_booted().expect("Failed to mark current firmware as good");
+                                info!("Firmware marked as valid");
+                                state = WatchState::MenuView(MenuView::main());
+                            } else {
+                                state = WatchState::MenuView(MenuView::firmware_settings(firmware_details(validated)));
+                            }
                         }
                     },
-                }
-            }
-            WatchState::ViewFirmware(view) => {
-                view.draw(&mut display).unwrap();
-
-                match select(btn.wait_for_any_edge(), async {
-                    loop {
-                        if let Some(evt) = touchpad.read_one_touch_event(true) {
-                            if let cst816s::TouchGesture::SingleClick = evt.gesture {
-                                let touched = Point::new(evt.x, evt.y);
-                                if view.validated(touched) {
-                                    break;
-                                }
-                            }
-                        } else {
-                            Timer::after(Duration::from_millis(1)).await;
-                        }
-                    }
-                })
-                .await
-                {
-                    Either::First(_) => {
-                        info!("Button pressed, back to settings");
-                        state = WatchState::ViewMenu(MenuView::settings());
-                    }
-                    Either::Second(_) => {
-                        let validated = FwState::Boot == fw.get_state().expect("Failed to read firmware state");
-                        if !validated {
-                            fw.mark_booted().expect("Failed to mark current firmware as good");
-                            info!("Firmware marked as valid");
-                            state = WatchState::ViewMenu(MenuView::main());
-                        } else {
-                            state = WatchState::ViewFirmware(FirmwareView::new(firmware_details(validated)));
-                        }
-                    }
                 }
             } /*
               WatchState::Workout => {
@@ -290,9 +288,8 @@ async fn main(s: Spawner) {
 
 pub enum WatchState<'a> {
     Idle,
-    ViewTime,
-    ViewMenu(MenuView<'a>),
-    ViewFirmware(FirmwareView),
+    TimeView,
+    MenuView(MenuView<'a>),
     //  FindPhone,
     //  Workout,
 }
@@ -517,11 +514,13 @@ pub async fn advertiser_task(
         let conn = peripheral::advertise_connectable(sd, adv, &config).await.unwrap();
 
         info!("Connection established");
+        Timer::after(Duration::from_secs(1)).await;
+        info!("Syncing time");
         if let Ok(time_client) = gatt_client::discover::<CurrentTimeServiceClient>(&conn).await {
             info!("Found time server on peer, synchronizing time");
             match time_client.get_time().await {
                 Ok(time) => {
-                    info!("Got time from peer: {:?}", defmt::Debug2Format(&time));
+                    // info!("Got time from peer: {:?}", defmt::Debug2Format(&time));
                     CLOCK.set(time);
                 }
                 Err(e) => {
@@ -745,5 +744,28 @@ mod my_display_interface {
             }
             _ => unimplemented!(),
         }
+    }
+}
+
+pub struct Screen {
+    display: Display,
+    backlight: Output<'static, AnyPin>,
+}
+
+impl Screen {
+    pub fn new(display: Display, backlight: Output<'static, AnyPin>) -> Self {
+        Self { display, backlight }
+    }
+
+    pub fn display(&mut self) -> &mut Display {
+        &mut self.display
+    }
+
+    pub fn on(&mut self) {
+        self.backlight.set_low();
+    }
+
+    pub fn off(&mut self) {
+        self.backlight.set_high();
     }
 }

@@ -3,26 +3,15 @@
 use ::core::fmt::Write as _;
 use embedded_graphics::pixelcolor::Rgb565 as Rgb;
 use embedded_graphics::prelude::{DrawTarget, *};
-use embedded_graphics::primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle};
+use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::{Text, TextStyleBuilder};
 use embedded_text::style::TextBoxStyleBuilder;
 use embedded_text::TextBox;
 use u8g2_fonts::{fonts, U8g2TextStyle};
 
-// mod core;
-
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 240;
 const GRID_ITEMS: u32 = 3;
-
-#[derive(Clone, Copy)]
-pub struct FirmwareDetails {
-    name: &'static str,
-    version: &'static str,
-    commit: &'static str,
-    build_timestamp: &'static str,
-    validated: bool,
-}
 
 fn watch_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
     //U8g2TextStyle::new(fonts::u8g2_font_unifont_t_symbols, Rgb::YELLOW)
@@ -38,55 +27,31 @@ fn text_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
     U8g2TextStyle::new(fonts::u8g2_font_unifont_t_symbols, color)
 }
 
-impl FirmwareDetails {
-    pub const fn new(
-        name: &'static str,
-        version: &'static str,
-        commit: &'static str,
-        build_timestamp: &'static str,
-        validated: bool,
-    ) -> Self {
-        Self {
-            name,
-            version,
-            commit,
-            build_timestamp,
-            validated,
-        }
-    }
-
-    pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
-        let start = Point::new(0, 0);
-        let end = Size::new(WIDTH as u32, 2 * (HEIGHT as u32 / GRID_ITEMS as u32) - 20);
-
-        let bounds = Rectangle::new(start, end);
-
-        let textbox_style = TextBoxStyleBuilder::new()
-            .height_mode(embedded_text::style::HeightMode::FitToText)
-            .alignment(embedded_text::alignment::HorizontalAlignment::Justified)
-            .paragraph_spacing(6)
-            .build();
-
-        let character_style = text_text_style(Rgb::YELLOW);
-
-        let mut info: heapless::String<256> = heapless::String::new();
-        write!(
-            info,
-            "Name: {}\nVersion: {}\nCommit: {}\nBuild: {}",
-            self.name, self.version, self.commit, self.build_timestamp
-        )
-        .unwrap();
-
-        TextBox::with_textbox_style(&info, bounds, character_style, textbox_style).draw(display)?;
-        Ok(())
-    }
+pub enum ButtonEvent {
+    ShortPress,
+    LongPress,
 }
 
-pub struct WatchView {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum InputEvent {
+    Touch(TouchGesture),
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum TouchGesture {
+    SingleTap(Point),
+    DoubleTap(Point),
+    SwipeUp(Point),
+    SwipeDown(Point),
+    SwipeLeft(Point),
+    SwipeRight(Point),
+}
+
+pub struct TimeView {
     time: time::PrimitiveDateTime,
 }
 
-impl WatchView {
+impl TimeView {
     pub fn new(time: time::PrimitiveDateTime) -> Self {
         Self { time }
     }
@@ -107,42 +72,12 @@ impl WatchView {
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum MenuChoice {
+pub enum MenuAction {
     Workout,
     FindPhone,
     Settings,
-    Firmware,
-}
-
-#[derive(Clone, Copy)]
-pub struct FirmwareView {
-    details: FirmwareDetails,
-    item: MenuItem<'static>,
-}
-
-impl FirmwareView {
-    pub fn new(details: FirmwareDetails) -> Self {
-        let valid = details.validated;
-        Self {
-            details,
-            item: MenuItem::new(if valid { "Validated" } else { "Validate" }, 2),
-        }
-    }
-
-    pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
-        display.clear(Rgb::BLACK)?;
-
-        // First draw the firmware info.
-        self.details.draw(display)?;
-
-        // Then a clickable item to mark it as working.
-        self.item.draw(display)?;
-        Ok(())
-    }
-
-    pub fn validated(&self, pos: Point) -> bool {
-        self.item.is_contained_by(pos)
-    }
+    FirmwareSettings,
+    ValidateFirmware,
 }
 
 #[derive(Clone, Copy)]
@@ -154,6 +89,10 @@ pub enum MenuView<'a> {
     },
     Settings {
         firmware: MenuItem<'a>,
+    },
+    Firmware {
+        details: FirmwareDetails,
+        item: MenuItem<'static>,
     },
 }
 
@@ -169,6 +108,14 @@ impl<'a> MenuView<'a> {
     pub fn settings() -> Self {
         Self::Settings {
             firmware: MenuItem::new("Firmware", 0),
+        }
+    }
+
+    pub fn firmware_settings(details: FirmwareDetails) -> Self {
+        let valid = details.validated;
+        Self::Firmware {
+            details,
+            item: MenuItem::new(if valid { "Validated" } else { "Validate" }, 2),
         }
     }
 
@@ -189,31 +136,43 @@ impl<'a> MenuView<'a> {
             Self::Settings { firmware } => {
                 firmware.draw(display)?;
             }
+
+            Self::Firmware { details, item } => {
+                details.draw(display)?;
+                item.draw(display)?;
+            }
         }
 
         Ok(())
     }
 
-    pub fn intersects(&self, pos: Point) -> Option<MenuChoice> {
+    pub fn on_event(&self, input: InputEvent) -> Option<MenuAction> {
         match self {
             Self::Main {
                 workout,
                 find_phone,
                 settings,
             } => {
-                if workout.is_contained_by(pos) {
-                    Some(MenuChoice::Workout)
-                } else if find_phone.is_contained_by(pos) {
-                    Some(MenuChoice::FindPhone)
-                } else if settings.is_contained_by(pos) {
-                    Some(MenuChoice::Settings)
+                if workout.is_clicked(input) {
+                    Some(MenuAction::Workout)
+                } else if find_phone.is_clicked(input) {
+                    Some(MenuAction::FindPhone)
+                } else if settings.is_clicked(input) {
+                    Some(MenuAction::Settings)
                 } else {
                     None
                 }
             }
             Self::Settings { firmware } => {
-                if firmware.is_contained_by(pos) {
-                    Some(MenuChoice::Firmware)
+                if firmware.is_clicked(input) {
+                    Some(MenuAction::FirmwareSettings)
+                } else {
+                    None
+                }
+            }
+            Self::Firmware { details: _, item } => {
+                if item.is_clicked(input) {
+                    Some(MenuAction::ValidateFirmware)
                 } else {
                     None
                 }
@@ -269,8 +228,65 @@ impl<'a> MenuItem<'a> {
     }
 
     // Check if point is within our range
-    pub fn is_contained_by(&self, pos: Point) -> bool {
-        let (c1, c2) = self.placement();
-        c1.x <= pos.x && c1.y <= pos.y && c2.x >= pos.x && c2.y >= pos.y
+    pub fn is_clicked(&self, event: InputEvent) -> bool {
+        if let InputEvent::Touch(TouchGesture::SingleTap(pos)) = event {
+            let (c1, c2) = self.placement();
+            c1.x <= pos.x && c1.y <= pos.y && c2.x >= pos.x && c2.y >= pos.y
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct FirmwareDetails {
+    name: &'static str,
+    version: &'static str,
+    commit: &'static str,
+    build_timestamp: &'static str,
+    validated: bool,
+}
+
+impl FirmwareDetails {
+    pub const fn new(
+        name: &'static str,
+        version: &'static str,
+        commit: &'static str,
+        build_timestamp: &'static str,
+        validated: bool,
+    ) -> Self {
+        Self {
+            name,
+            version,
+            commit,
+            build_timestamp,
+            validated,
+        }
+    }
+
+    pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
+        let start = Point::new(0, 0);
+        let end = Size::new(WIDTH as u32, 2 * (HEIGHT as u32 / GRID_ITEMS as u32) - 20);
+
+        let bounds = Rectangle::new(start, end);
+
+        let textbox_style = TextBoxStyleBuilder::new()
+            .height_mode(embedded_text::style::HeightMode::FitToText)
+            .alignment(embedded_text::alignment::HorizontalAlignment::Justified)
+            .paragraph_spacing(6)
+            .build();
+
+        let character_style = text_text_style(Rgb::YELLOW);
+
+        let mut info: heapless::String<256> = heapless::String::new();
+        write!(
+            info,
+            "Name: {}\nVersion: {}\nCommit: {}\nBuild: {}",
+            self.name, self.version, self.commit, self.build_timestamp
+        )
+        .unwrap();
+
+        TextBox::with_textbox_style(&info, bounds, character_style, textbox_style).draw(display)?;
+        Ok(())
     }
 }

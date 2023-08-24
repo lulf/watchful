@@ -18,7 +18,7 @@ fn main() -> Result<(), core::convert::Infallible> {
 
     let mut display = SimulatorDisplay::<Rgb>::new(Size::new(240, 240));
 
-    let view = FirmwareView::new(FirmwareDetails::new(
+    let view = MenuView::firmware_settings(FirmwareDetails::new(
         "watchful-os",
         "0.1.0",
         "abcdefg",
@@ -27,10 +27,5 @@ fn main() -> Result<(), core::convert::Infallible> {
     ));
     view.draw(&mut display)?;
     Window::new("Firmware", &output_settings).show_static(&display);
-
-    //let mut display = SimulatorDisplay::<Rgb>::new(Size::new(240, 240));
-    // let view = WatchView::new(time::OffsetDateTime::now_utc().into());
-    //view.draw(&mut display)?;
-    //Window::new("Watch", &output_settings).show_static(&display);
     Ok(())
 }
