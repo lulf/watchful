@@ -88,6 +88,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bbqueue"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd3baa8859d1a4c7411039a75c0599a4640ef1c9a8fc811e4325b00e6cfe0a55"
+dependencies = [
+ "defmt",
+]
+
+[[package]]
 name = "bitfield"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -300,6 +309,17 @@ checksum = "a8a2d011b2fee29fb7d659b83c43fce9a2cb4df453e16d441a51448e448f3f98"
 dependencies = [
  "bitflags 1.3.2",
  "defmt-macros",
+]
+
+[[package]]
+name = "defmt-brtt"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2f0ac3635d0c89d12b8101fcb44a7625f5f030a1c0491124b74467eb5a58a78"
+dependencies = [
+ "bbqueue",
+ "critical-section",
+ "defmt",
 ]
 
 [[package]]
@@ -1237,9 +1257,9 @@ checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 
 [[package]]
 name = "serde"
-version = "1.0.183"
+version = "1.0.179"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32ac8da02677876d532745a130fc9d8e6edfa81a269b107c5b00829b91d8eb3c"
+checksum = "0a5bf42b8d227d4abf38a1ddb08602e229108a517cd4e5bb28f9c7eaafdce5c0"
 
 [[package]]
 name = "signature"
@@ -1424,7 +1444,7 @@ dependencies = [
  "cortex-m-rt",
  "cst816s",
  "defmt",
- "defmt-rtt",
+ "defmt-brtt",
  "display-interface",
  "display-interface-spi",
  "embassy-boot",

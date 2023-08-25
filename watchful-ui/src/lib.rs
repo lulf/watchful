@@ -1,6 +1,7 @@
 #![no_std]
 
-use ::core::fmt::Write as _;
+use core::fmt::Write as _;
+
 use embedded_graphics::pixelcolor::Rgb565 as Rgb;
 use embedded_graphics::prelude::{DrawTarget, *};
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
@@ -52,11 +53,17 @@ pub enum TouchGesture {
 
 pub struct TimeView {
     time: time::PrimitiveDateTime,
+    battery_level: u32,
+    battery_charging: bool,
 }
 
 impl TimeView {
-    pub fn new(time: time::PrimitiveDateTime) -> Self {
-        Self { time }
+    pub fn new(time: time::PrimitiveDateTime, battery_level: u32, battery_charging: bool) -> Self {
+        Self {
+            time,
+            battery_level,
+            battery_charging,
+        }
     }
     pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
         display.clear(Rgb::BLACK)?;
@@ -66,15 +73,34 @@ impl TimeView {
             .baseline(embedded_graphics::text::Baseline::Alphabetic)
             .build();
 
-        let mut text: heapless::String<16> = heapless::String::new();
-        write!(text, "{:02}:{:02}", self.time.hour(), self.time.minute()).unwrap();
-        let text = Text::with_text_style(&text, display.bounding_box().center(), character_style, text_style);
+        let mut buf: heapless::String<16> = heapless::String::new();
+        write!(buf, "{:02}:{:02}", self.time.hour(), self.time.minute()).unwrap();
+        let text = Text::with_text_style(&buf, display.bounding_box().center(), character_style, text_style);
         let display_area = display.bounding_box();
         LinearLayout::vertical(Chain::new(text))
             .with_alignment(horizontal::Center)
             .arrange()
             .align_to(&display_area, horizontal::Center, vertical::Center)
             .draw(display)?;
+
+        let display_area = display_area.offset(-5);
+        buf.clear();
+        if self.battery_charging {
+            write!(buf, "(Charging) {}%", self.battery_level);
+        } else {
+            write!(buf, "{}%", self.battery_level);
+        }
+
+        LinearLayout::vertical(Chain::new(Text::with_text_style(
+            &buf,
+            display_area.center(),
+            text_text_style(Rgb::CSS_DARK_CYAN),
+            TextStyleBuilder::new().build(),
+        )))
+        .with_alignment(horizontal::Right)
+        .arrange()
+        .align_to(&display_area, horizontal::Right, vertical::Top)
+        .draw(display)?;
         Ok(())
     }
 }

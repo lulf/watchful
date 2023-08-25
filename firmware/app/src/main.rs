@@ -5,7 +5,7 @@
 use core::cell::RefCell;
 
 use defmt::{info, warn};
-use defmt_rtt as _;
+use defmt_brtt as _;
 use embassy_boot::State as FwState;
 use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareState as FirmwareState, FirmwareUpdaterConfig};
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
@@ -13,12 +13,14 @@ use embassy_executor::Spawner;
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pin, Pull};
 use embassy_nrf::interrupt::Priority;
-use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, TWISPI0};
+use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, SAADC, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
-use embassy_nrf::{bind_interrupts, pac, peripherals, spim, twim};
+use embassy_nrf::{bind_interrupts, pac, peripherals, saadc, spim, twim};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BMutex;
+use embassy_sync::pipe::Pipe;
+use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::prelude::*;
 use embedded_storage::nor_flash::NorFlash;
@@ -41,7 +43,7 @@ use crate::my_display_interface::SPIDeviceInterface;
 bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
     SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1 => twim::InterruptHandler<peripherals::TWISPI1>;
-
+    SAADC => saadc::InterruptHandler;
 });
 
 const MTU: usize = 120;
@@ -82,6 +84,8 @@ fn panic(_info: &PanicInfo) -> ! {
 
 #[embassy_executor::main]
 async fn main(s: Spawner) {
+    let mut logger = defmt_brtt::init();
+
     let mut config = embassy_nrf::config::Config::default();
     config.gpiote_interrupt_priority = Priority::P2;
     config.time_interrupt_priority = Priority::P2;
@@ -95,6 +99,16 @@ async fn main(s: Spawner) {
     s.spawn(softdevice_task(sd)).unwrap();
     s.spawn(watchdog_task()).unwrap();
     s.spawn(clock(&CLOCK)).unwrap();
+
+    // Battery measurement
+    let mut bat_config = saadc::ChannelConfig::single_ended(p.P0_31);
+    bat_config.gain = saadc::Gain::GAIN1_4;
+    bat_config.resistor = saadc::Resistor::BYPASS;
+    bat_config.reference = saadc::Reference::INTERNAL;
+    bat_config.time = saadc::Time::_40US;
+    let adc_config = saadc::Config::default();
+    let saadc = saadc::Saadc::new(p.SAADC, Irqs, adc_config, [bat_config]);
+    let mut battery = Battery::new(saadc, Input::new(p.P0_12.degrade(), Pull::Down));
 
     // Touch peripheral
     let mut twim_config = twim::Config::default();
@@ -111,7 +125,7 @@ async fn main(s: Spawner) {
     // Button enable
     let _btn_enable = Output::new(p.P0_15, Level::High, OutputDrive::Standard);
 
-    let mut btn = Input::new(p.P0_13, Pull::Down);
+    let mut btn = Button::new(Input::new(p.P0_13.degrade(), Pull::Down));
 
     let mut default_config = spim::Config::default();
     default_config.frequency = spim::Frequency::M8;
@@ -167,52 +181,68 @@ async fn main(s: Spawner) {
             WatchState::Idle => {
                 defmt::info!("Idle");
                 screen.off();
-                btn.wait_for_any_edge().await;
-                if btn.is_high() {
-                    state = WatchState::TimeView;
-                }
-                // Idle task wait for reactions
-                // select(wait_for_button, wait_for_touch, timeout)
+                btn.wait().await;
+                state = WatchState::TimeView;
             }
             WatchState::TimeView => {
                 defmt::info!("View time");
-                screen.on();
                 let mut now = CLOCK.get();
-                TimeView::new(now).draw(screen.display()).unwrap();
+                let mut battery_level = battery.measure().await;
+                let mut battery_enabled = battery.is_enabled();
+                TimeView::new(now, battery_level, battery_enabled)
+                    .draw(screen.display())
+                    .unwrap();
+                screen.on();
                 let mut timeout = Timer::after(Duration::from_secs(10));
                 loop {
-                    match select3(
-                        Timer::after(Duration::from_secs(1)),
-                        &mut timeout,
-                        btn.wait_for_any_edge(),
-                    )
-                    .await
-                    {
+                    match select3(Timer::after(Duration::from_secs(1)), &mut timeout, btn.wait()).await {
                         Either3::First(_) => {
                             let t = CLOCK.get();
-                            if t.minute() != now.minute() {
-                                TimeView::new(t).draw(screen.display()).unwrap();
+                            let b = battery.measure().await;
+                            let l = battery.is_enabled();
+                            if t.minute() != now.minute() || b != battery_level || l != battery_enabled {
+                                TimeView::new(t, b, l).draw(screen.display()).unwrap();
                             }
                             now = t;
+                            battery_level = b;
+                            battery_enabled = l;
                         }
                         Either3::Second(_) => {
                             state = WatchState::Idle;
                             break;
                         }
                         Either3::Third(_) => {
-                            if btn.is_high() {
-                                state = WatchState::MenuView(MenuView::main());
-                                break;
-                            }
+                            state = WatchState::MenuView(MenuView::main());
+                            break;
                         }
                     }
                 }
             }
+            /*
+            WatchState::LoggerView => {
+                if let Ok(logger) = &mut logger {
+                    loop {
+                        match select(btn.wait(), logger.wait_for_log()).await {
+                            Either::First(_) => {
+                                state = WatchState::Idle;
+                                break;
+                            }
+                            Either::Second(grant) => {
+                                view.update(&grant);
+                                view.draw(screen.display()).unwrap();
+                                screen.on();
+                            }
+                        }
+                    }
+                } else {
+                    state = WatchState::Idle;
+                }
+            }*/
             WatchState::MenuView(menu) => {
-                screen.on();
                 menu.draw(screen.display()).unwrap();
+                screen.on();
 
-                match select(btn.wait_for_any_edge(), async {
+                match select(btn.wait(), async {
                     let selected;
                     loop {
                         if let Some(evt) = touchpad.read_one_touch_event(true) {
@@ -287,12 +317,79 @@ async fn main(s: Spawner) {
     }
 }
 
+pub struct Button {
+    pin: Input<'static, AnyPin>,
+}
+
+impl Button {
+    pub fn new(pin: Input<'static, AnyPin>) -> Self {
+        Self { pin }
+    }
+    pub async fn wait(&mut self) {
+        self.pin.wait_for_any_edge().await;
+        if self.pin.is_high() {
+            match select(Timer::after(Duration::from_secs(5)), self.pin.wait_for_falling_edge()).await {
+                Either::First(_) => {
+                    if self.pin.is_high() {
+                        cortex_m::peripheral::SCB::sys_reset();
+                    }
+                }
+                Either::Second(_) => {}
+            }
+        }
+    }
+}
+
+pub struct Battery<'a> {
+    enabled: Input<'a, AnyPin>,
+    adc: saadc::Saadc<'a, 1>,
+}
+
+impl<'a> Battery<'a> {
+    pub fn new(adc: saadc::Saadc<'a, 1>, enabled: Input<'a, AnyPin>) -> Self {
+        Self { adc, enabled }
+    }
+    pub async fn measure(&mut self) -> u32 {
+        if self.enabled.is_high() {
+            let mut buf = [0i16; 1];
+            self.adc.sample(&mut buf).await;
+            let voltage = (buf[0] * 2000 / 1241) as u32;
+            100 * voltage / 3300
+        } else {
+            100
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.is_high()
+    }
+}
 pub enum WatchState<'a> {
     Idle,
     TimeView,
     MenuView(MenuView<'a>),
     //  FindPhone,
     //  Workout,
+}
+
+#[nrf_softdevice::gatt_service(uuid = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")]
+pub struct NrfUartService {
+    #[characteristic(uuid = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E", write)]
+    rx: Vec<u8, ATT_MTU>,
+
+    #[characteristic(uuid = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E", notify)]
+    tx: Vec<u8, ATT_MTU>,
+}
+
+impl NrfUartService {
+    fn handle(&self, connection: &mut ConnectionHandle, event: NrfUartServiceEvent) {
+        match event {
+            NrfUartServiceEvent::TxCccdWrite { notifications } => {
+                info!("Enable logging: {}", notifications);
+            }
+            _ => {}
+        }
+    }
 }
 
 #[nrf_softdevice::gatt_service(uuid = "FE59")]
@@ -307,18 +404,18 @@ pub struct NrfDfuService {
     packet: Vec<u8, ATT_MTU>,
 }
 
-struct DfuConnection {
+struct ConnectionHandle {
     pub connection: Connection,
     pub notify_control: bool,
     pub notify_packet: bool,
 }
 
 impl NrfDfuService {
-    fn process<DFU: NorFlash, F: FnOnce(&DfuConnection, &[u8]) -> Result<(), NotifyValueError>>(
+    fn process<DFU: NorFlash, F: FnOnce(&ConnectionHandle, &[u8]) -> Result<(), NotifyValueError>>(
         &self,
         target: &mut Target,
         dfu: &mut DFU,
-        conn: &mut DfuConnection,
+        conn: &mut ConnectionHandle,
         request: DfuRequest<'_>,
         notify: F,
     ) -> DfuStatus {
@@ -342,7 +439,7 @@ impl NrfDfuService {
         &self,
         target: &mut Target,
         dfu: &mut DFU,
-        connection: &mut DfuConnection,
+        connection: &mut ConnectionHandle,
         event: NrfDfuServiceEvent,
     ) -> Option<DfuStatus> {
         match event {
@@ -379,6 +476,7 @@ impl NrfDfuService {
 #[nrf_softdevice::gatt_server]
 pub struct PineTimeServer {
     dfu: NrfDfuService,
+    uart: NrfUartService,
 }
 
 #[nrf_softdevice::gatt_client(uuid = "1805")]
@@ -419,11 +517,15 @@ impl PineTimeServer {
         &self,
         target: &mut Target,
         dfu: &mut DFU,
-        conn: &mut DfuConnection,
+        conn: &mut ConnectionHandle,
         event: PineTimeServerEvent,
     ) -> Option<DfuStatus> {
         match event {
             PineTimeServerEvent::Dfu(event) => self.dfu.handle(target, dfu, conn, event),
+            PineTimeServerEvent::Uart(event) => {
+                self.uart.handle(conn, event);
+                None
+            }
         }
     }
 }
@@ -453,7 +555,7 @@ pub async fn gatt_server_task(
         len: 0,
     };
 
-    let mut dfu_conn = DfuConnection {
+    let mut conn_handle = ConnectionHandle {
         connection: conn.clone(),
         notify_control: false,
         notify_packet: false,
@@ -466,7 +568,7 @@ pub async fn gatt_server_task(
     let mut state = FirmwareState::new(config.state, &mut magic.0);
 
     let _ = gatt_server::run(&conn, server, |e| {
-        if let Some(DfuStatus::DoneReset) = server.handle(&mut target, &mut config.dfu, &mut dfu_conn, e) {
+        if let Some(DfuStatus::DoneReset) = server.handle(&mut target, &mut config.dfu, &mut conn_handle, e) {
             info!("Firmware updated!");
             match state.mark_updated() {
                 Ok(_) => {
