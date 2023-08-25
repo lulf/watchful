@@ -328,7 +328,7 @@ impl Button {
     pub async fn wait(&mut self) {
         self.pin.wait_for_any_edge().await;
         if self.pin.is_high() {
-            match select(Timer::after(Duration::from_secs(5)), self.pin.wait_for_falling_edge()).await {
+            match select(Timer::after(Duration::from_secs(8)), self.pin.wait_for_falling_edge()).await {
                 Either::First(_) => {
                     if self.pin.is_high() {
                         cortex_m::peripheral::SCB::sys_reset();
