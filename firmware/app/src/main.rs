@@ -5,7 +5,7 @@
 use core::cell::RefCell;
 
 use defmt::{info, warn};
-use defmt_brtt as _;
+use defmt_rtt as _;
 use embassy_boot::State as FwState;
 use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareState as FirmwareState, FirmwareUpdaterConfig};
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
@@ -13,14 +13,12 @@ use embassy_executor::Spawner;
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pin, Pull};
 use embassy_nrf::interrupt::Priority;
-use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, SAADC, TWISPI0};
+use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, TWISPI0};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, pac, peripherals, saadc, spim, twim};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BMutex;
-use embassy_sync::pipe::Pipe;
-use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::prelude::*;
 use embedded_storage::nor_flash::NorFlash;
@@ -84,8 +82,6 @@ fn panic(_info: &PanicInfo) -> ! {
 
 #[embassy_executor::main]
 async fn main(s: Spawner) {
-    let mut logger = defmt_brtt::init();
-
     let mut config = embassy_nrf::config::Config::default();
     config.gpiote_interrupt_priority = Priority::P2;
     config.time_interrupt_priority = Priority::P2;
@@ -382,7 +378,7 @@ pub struct NrfUartService {
 }
 
 impl NrfUartService {
-    fn handle(&self, connection: &mut ConnectionHandle, event: NrfUartServiceEvent) {
+    fn handle(&self, _connection: &mut ConnectionHandle, event: NrfUartServiceEvent) {
         match event {
             NrfUartServiceEvent::TxCccdWrite { notifications } => {
                 info!("Enable logging: {}", notifications);

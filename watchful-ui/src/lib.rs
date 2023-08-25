@@ -86,9 +86,9 @@ impl TimeView {
         let display_area = display_area.offset(-5);
         buf.clear();
         if self.battery_charging {
-            write!(buf, "(Charging) {}%", self.battery_level);
+            write!(buf, "(Charging) {}%", self.battery_level).unwrap();
         } else {
-            write!(buf, "{}%", self.battery_level);
+            write!(buf, "{}%", self.battery_level).unwrap();
         }
 
         LinearLayout::vertical(Chain::new(Text::with_text_style(
