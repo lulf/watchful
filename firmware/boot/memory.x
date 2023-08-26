@@ -4,10 +4,10 @@ MEMORY
   MBR                               : ORIGIN = 0x00000000, LENGTH = 4K
   SOFTDEVICE                        : ORIGIN = 0x00001000, LENGTH = 148K
   ACTIVE                            : ORIGIN = 0x00026000, LENGTH = 324K
-  FLASH                             : ORIGIN = 0x00077000, LENGTH = 28K
+  FLASH                             : ORIGIN = 0x00077000, LENGTH = 32K
+  BOOTLOADER_STATE                  : ORIGIN = 0x0007F000, LENGTH = 4K
 
   DFU                               : ORIGIN = 0x00000000, LENGTH = 328K
-  BOOTLOADER_STATE                  : ORIGIN = 0x003FF000, LENGTH = 4K
 
   RAM                         (rwx) : ORIGIN = 0x20000008, LENGTH = 0xfff8
   uicr_bootloader_start_address (r) : ORIGIN = 0x10001014, LENGTH = 0x4

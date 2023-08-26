@@ -71,7 +71,7 @@ pub fn create_flash_config<'a, 'b, 'c>(
 ) -> BootLoaderConfig<
     BlockingPartition<'a, NoopRawMutex, WatchdogFlash<Nvmc<'b>>>,
     BlockingPartition<'a, NoopRawMutex, ExternalFlash<'b, 'c>>,
-    BlockingPartition<'a, NoopRawMutex, ExternalFlash<'b, 'c>>,
+    BlockingPartition<'a, NoopRawMutex, WatchdogFlash<Nvmc<'b>>>,
 > {
     extern "C" {
         static __bootloader_state_start: u32;
@@ -101,7 +101,7 @@ pub fn create_flash_config<'a, 'b, 'c>(
         let end = &__bootloader_state_end as *const u32 as u32;
         // trace!("STATE: 0x{:x} - 0x{:x}", start, end);
 
-        BlockingPartition::new(external, start, end - start)
+        BlockingPartition::new(internal, start, end - start)
     };
 
     BootLoaderConfig { active, dfu, state }

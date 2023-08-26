@@ -7,7 +7,8 @@ use core::cell::RefCell;
 use defmt::{info, warn};
 use defmt_rtt as _;
 use embassy_boot::State as FwState;
-use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareState as FirmwareState, FirmwareUpdaterConfig};
+use embassy_boot_nrf::{AlignedBuffer, FirmwareState};
+use embassy_embedded_hal::flash::partition::{BlockingPartition, Partition};
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, select3, Either, Either3};
@@ -19,6 +20,7 @@ use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, pac, peripherals, saadc, spim, twim};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::prelude::*;
 use embedded_storage::nor_flash::NorFlash;
@@ -52,7 +54,7 @@ type Target = DfuTarget<256>;
 
 static CLOCK: clock::Clock = clock::Clock::new();
 
-type Flash = XtFlash<SpiDevice<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static, P0_05>>>;
+type ExternalFlash = XtFlash<SpiDevice<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static, P0_05>>>;
 type Display = mipidsi::Display<
     SPIDeviceInterface<
         SpiDevice<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static, P0_25>>,
@@ -61,6 +63,62 @@ type Display = mipidsi::Display<
     ST7789,
     Output<'static, P0_26>,
 >;
+
+type InternalFlash = nrf_softdevice::Flash;
+type StatePartition<'a> = Partition<'a, NoopRawMutex, InternalFlash>;
+type DfuPartition<'a> = BlockingPartition<'a, NoopRawMutex, ExternalFlash>;
+
+#[derive(Clone)]
+pub struct DfuConfig<'a> {
+    internal: &'a Mutex<NoopRawMutex, InternalFlash>,
+    external: &'a BMutex<NoopRawMutex, RefCell<ExternalFlash>>,
+    state_start: u32,
+    state_end: u32,
+    dfu_start: u32,
+    dfu_end: u32,
+}
+
+impl<'a> DfuConfig<'a> {
+    pub fn new(
+        internal: &'a Mutex<NoopRawMutex, InternalFlash>,
+        external: &'a BMutex<NoopRawMutex, RefCell<ExternalFlash>>,
+    ) -> Self {
+        extern "C" {
+            static __bootloader_state_start: u32;
+            static __bootloader_state_end: u32;
+            static __bootloader_dfu_start: u32;
+            static __bootloader_dfu_end: u32;
+        }
+
+        unsafe {
+            let dfu_start = &__bootloader_dfu_start as *const u32 as u32;
+            let dfu_end = &__bootloader_dfu_end as *const u32 as u32;
+
+            BlockingPartition::new(external, dfu_start, dfu_end - dfu_start);
+
+            let state_start = &__bootloader_state_start as *const u32 as u32;
+            let state_end = &__bootloader_state_end as *const u32 as u32;
+
+            Partition::new(internal, state_start, state_end - state_start);
+            Self {
+                internal,
+                external,
+                state_start,
+                state_end,
+                dfu_start,
+                dfu_end,
+            }
+        }
+    }
+
+    pub fn state(&self) -> StatePartition<'a> {
+        StatePartition::new(self.internal, self.state_start, self.state_end - self.state_start)
+    }
+
+    pub fn dfu(&self) -> DfuPartition<'a> {
+        DfuPartition::new(self.external, self.dfu_start, self.dfu_end - self.dfu_start)
+    }
+}
 
 fn firmware_details(validated: bool) -> FirmwareDetails {
     const CARGO_NAME: &str = env!("CARGO_PKG_NAME");
@@ -135,10 +193,15 @@ async fn main(s: Spawner) {
     let flash_cs = Output::new(p.P0_05, Level::High, OutputDrive::Standard);
     let flash_spi = SpiDevice::new(spi_bus, flash_cs);
     let xt_flash = XtFlash::new(flash_spi).unwrap();
-    static FLASH: StaticCell<BMutex<NoopRawMutex, RefCell<Flash>>> = StaticCell::new();
-    let flash = FLASH.init(BMutex::new(RefCell::new(xt_flash)));
+    static EXTERNAL_FLASH: StaticCell<BMutex<NoopRawMutex, RefCell<ExternalFlash>>> = StaticCell::new();
+    let external_flash = EXTERNAL_FLASH.init(BMutex::new(RefCell::new(xt_flash)));
 
-    s.spawn(advertiser_task(s, sd, server, flash, "Pinetime Embassy"))
+    let internal_flash = nrf_softdevice::Flash::take(sd);
+    static INTERNAL_FLASH: StaticCell<Mutex<NoopRawMutex, InternalFlash>> = StaticCell::new();
+    let internal_flash = INTERNAL_FLASH.init(Mutex::new(internal_flash));
+    let dfu_config = DfuConfig::new(internal_flash, external_flash);
+
+    s.spawn(advertiser_task(s, sd, server, dfu_config.clone(), "Pinetime Embassy"))
         .unwrap();
 
     // Medium backlight
@@ -168,9 +231,8 @@ async fn main(s: Spawner) {
     display.set_orientation(mipidsi::Orientation::Portrait(false)).unwrap();
     let mut screen = Screen::new(display, backlight);
 
-    let config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
-    let mut magic = AlignedBuffer([0; 1]);
-    let mut fw = FirmwareState::new(config.state, &mut magic.0);
+    let mut magic = AlignedBuffer([0; 4]);
+    let mut fw = FirmwareState::new(dfu_config.state(), &mut magic.0);
     let mut state = WatchState::Idle;
     loop {
         match state {
@@ -281,14 +343,16 @@ async fn main(s: Spawner) {
                             state = WatchState::MenuView(MenuView::settings());
                         }
                         MenuAction::FirmwareSettings => {
-                            let validated = FwState::Boot == fw.get_state().expect("Failed to read firmware state");
+                            let validated =
+                                FwState::Boot == fw.get_state().await.expect("Failed to read firmware state");
                             state = WatchState::MenuView(MenuView::firmware_settings(firmware_details(validated)));
                         }
                         MenuAction::ValidateFirmware => {
                             info!("Validate firmware");
-                            let validated = FwState::Boot == fw.get_state().expect("Failed to read firmware state");
+                            let validated =
+                                FwState::Boot == fw.get_state().await.expect("Failed to read firmware state");
                             if !validated {
-                                fw.mark_booted().expect("Failed to mark current firmware as good");
+                                fw.mark_booted().await.expect("Failed to mark current firmware as good");
                                 info!("Firmware marked as valid");
                                 state = WatchState::MenuView(MenuView::main());
                             } else {
@@ -527,11 +591,7 @@ impl PineTimeServer {
 }
 
 #[embassy_executor::task(pool_size = "1")]
-pub async fn gatt_server_task(
-    conn: Connection,
-    server: &'static PineTimeServer,
-    flash: &'static BMutex<NoopRawMutex, RefCell<Flash>>,
-) {
+pub async fn gatt_server_task(conn: Connection, server: &'static PineTimeServer, dfu_config: DfuConfig<'static>) {
     let p = unsafe { pac::Peripherals::steal() };
     let part = p.FICR.info.part.read().part().bits();
     let variant = p.FICR.info.variant.read().variant().bits();
@@ -558,23 +618,13 @@ pub async fn gatt_server_task(
     };
 
     info!("Running GATT server");
-    let mut config = FirmwareUpdaterConfig::from_linkerfile_blocking(flash);
-    let mut target = DfuTarget::new(config.dfu.size(), fw_info, hw_info);
-    let mut magic = AlignedBuffer([0; 1]);
-    let mut state = FirmwareState::new(config.state, &mut magic.0);
+    let mut dfu = dfu_config.dfu();
+    let mut target = DfuTarget::new(dfu.size(), fw_info, hw_info);
+    let spawner = Spawner::for_current_executor().await;
 
     let _ = gatt_server::run(&conn, server, |e| {
-        if let Some(DfuStatus::DoneReset) = server.handle(&mut target, &mut config.dfu, &mut conn_handle, e) {
-            info!("Firmware updated!");
-            match state.mark_updated() {
-                Ok(_) => {
-                    info!("Firmware updated, resetting");
-                    cortex_m::peripheral::SCB::sys_reset();
-                }
-                Err(e) => {
-                    panic!("Error marking firmware updated: {:?}", e);
-                }
-            }
+        if let Some(DfuStatus::DoneReset) = server.handle(&mut target, &mut dfu, &mut conn_handle, e) {
+            let _ = spawner.spawn(finish_dfu(dfu_config.clone()));
         }
     })
     .await;
@@ -582,11 +632,26 @@ pub async fn gatt_server_task(
 }
 
 #[embassy_executor::task]
+pub async fn finish_dfu(config: DfuConfig<'static>) {
+    let mut magic = AlignedBuffer([0; 4]);
+    let mut state = FirmwareState::new(config.state(), &mut magic.0);
+    match state.mark_updated().await {
+        Ok(_) => {
+            info!("Firmware updated, resetting");
+            cortex_m::peripheral::SCB::sys_reset();
+        }
+        Err(e) => {
+            panic!("Error marking firmware updated: {:?}", e);
+        }
+    }
+}
+
+#[embassy_executor::task]
 pub async fn advertiser_task(
     spawner: Spawner,
     sd: &'static Softdevice,
     server: &'static PineTimeServer,
-    flash: &'static BMutex<NoopRawMutex, RefCell<Flash>>,
+    dfu_config: DfuConfig<'static>,
     name: &'static str,
 ) {
     let mut adv_data: Vec<u8, 31> = Vec::new();
@@ -628,7 +693,7 @@ pub async fn advertiser_task(
             }
         }
 
-        if let Err(e) = spawner.spawn(gatt_server_task(conn, server, flash)) {
+        if let Err(e) = spawner.spawn(gatt_server_task(conn, server, dfu_config.clone())) {
             defmt::info!("Error spawning gatt task: {:?}", e);
         }
     }
