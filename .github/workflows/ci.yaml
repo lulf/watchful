@@ -20,4 +20,4 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Build
-        run: for p in firmware/boot firmware/app pinetime-flash watchtime-ui; do pushd $p; cargo build; popd; done
+        run: for p in firmware/boot firmware/app pinetime-flash watchful-ui; do pushd $p; cargo build; popd; done
