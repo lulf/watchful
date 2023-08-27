@@ -120,13 +120,24 @@ impl<'a> DfuConfig<'a> {
     }
 }
 
-fn firmware_details(validated: bool) -> FirmwareDetails {
+async fn firmware_details(battery: &mut Battery<'_>, validated: bool) -> FirmwareDetails {
     const CARGO_NAME: &str = env!("CARGO_PKG_NAME");
     const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
     const COMMIT: &str = env!("VERGEN_GIT_SHA");
     const BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
 
-    FirmwareDetails::new(CARGO_NAME, CARGO_VERSION, COMMIT, BUILD_TIMESTAMP, validated)
+    let battery_level = battery.measure().await;
+    let battery_charging = battery.is_charging();
+
+    FirmwareDetails::new(
+        CARGO_NAME,
+        CARGO_VERSION,
+        COMMIT,
+        BUILD_TIMESTAMP,
+        battery_level,
+        battery_charging,
+        validated,
+    )
 }
 
 use core::panic::PanicInfo;
@@ -348,7 +359,9 @@ async fn main(s: Spawner) {
                         MenuAction::FirmwareSettings => {
                             let validated =
                                 FwState::Boot == fw.get_state().await.expect("Failed to read firmware state");
-                            state = WatchState::MenuView(MenuView::firmware_settings(firmware_details(validated)));
+                            state = WatchState::MenuView(MenuView::firmware_settings(
+                                firmware_details(&mut battery, validated).await,
+                            ));
                         }
                         MenuAction::ValidateFirmware => {
                             info!("Validate firmware");
@@ -359,7 +372,9 @@ async fn main(s: Spawner) {
                                 info!("Firmware marked as valid");
                                 state = WatchState::MenuView(MenuView::main());
                             } else {
-                                state = WatchState::MenuView(MenuView::firmware_settings(firmware_details(validated)));
+                                state = WatchState::MenuView(MenuView::firmware_settings(
+                                    firmware_details(&mut battery, validated).await,
+                                ));
                             }
                         }
                     },

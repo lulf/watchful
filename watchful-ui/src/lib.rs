@@ -289,6 +289,8 @@ pub struct FirmwareDetails {
     version: &'static str,
     commit: &'static str,
     build_timestamp: &'static str,
+    battery_level: u32,
+    battery_charging: bool,
     validated: bool,
 }
 
@@ -298,6 +300,8 @@ impl FirmwareDetails {
         version: &'static str,
         commit: &'static str,
         build_timestamp: &'static str,
+        battery_level: u32,
+        battery_charging: bool,
         validated: bool,
     ) -> Self {
         Self {
@@ -305,6 +309,8 @@ impl FirmwareDetails {
             version,
             commit,
             build_timestamp,
+            battery_level,
+            battery_charging,
             validated,
         }
     }
@@ -323,11 +329,16 @@ impl FirmwareDetails {
 
         let character_style = text_text_style(Rgb::CSS_LIGHT_CORAL);
 
-        let mut info: heapless::String<256> = heapless::String::new();
+        let mut info: heapless::String<512> = heapless::String::new();
         write!(
             info,
-            "Name: {}\nVersion: {}\nCommit: {}\nBuild: {}",
-            self.name, self.version, self.commit, self.build_timestamp
+            "Name: {}\nVersion: {}\nCommit: {}\nBuild: {}\nBattery: {}{}",
+            self.name,
+            self.version,
+            self.commit,
+            self.build_timestamp,
+            self.battery_level,
+            if self.battery_charging { "(Charging)" } else { "" }
         )
         .unwrap();
 
