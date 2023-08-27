@@ -171,7 +171,8 @@ async fn main(s: Spawner) {
     bat_config.resistor = saadc::Resistor::BYPASS;
     bat_config.reference = saadc::Reference::INTERNAL;
     bat_config.time = saadc::Time::_40US;
-    let adc_config = saadc::Config::default();
+    let mut adc_config = saadc::Config::default();
+    adc_config.resolution = saadc::Resolution::_10BIT;
     let saadc = saadc::Saadc::new(p.SAADC, Irqs, adc_config, [bat_config]);
     let mut battery = Battery::new(saadc, Input::new(p.P0_12.degrade(), Pull::Up));
 
@@ -430,8 +431,8 @@ impl<'a> Battery<'a> {
     pub async fn measure(&mut self) -> u32 {
         let mut buf = [0i16; 1];
         self.adc.sample(&mut buf).await;
-        //let voltage = buf[0] as u32 * (8 * 600) / 1024;
-        let voltage = buf[0] as u32 * 2000 / 1241;
+        let voltage = buf[0] as u32 * (8 * 600) / 1024;
+        //let voltage = buf[0] as u32 * 2000 / 1241;
         approximate_charge(voltage)
     }
 
