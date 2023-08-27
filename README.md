@@ -6,7 +6,7 @@ Real Time Async Enterprise Watch OS written in Rust!
 
 Firmware for Pinetime based on [Embassy](https://embassy.dev). The goal is to provide a firmware for the PineTime that is written in Rust and can function as watch OS.
 
-![PineTime on my arm running Watchful](image.png)
+<img src="image.png" alt="PineTime on my arm running Watchful" style="width:200px;"/>
 
 ## Getting started
 
