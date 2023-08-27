@@ -416,8 +416,27 @@ impl<'a> Battery<'a> {
         if self.charging.is_low() {
             let mut buf = [0i16; 1];
             self.adc.sample(&mut buf).await;
-            let voltage = buf[0] as u32 * 2000 / 1241;
-            100 * voltage / 3300
+            let voltage = buf[0] as u32 * (8 * 600) / 1024;
+
+            let level_approx = &[(3500, 0), (3616, 3), (3723, 22), (3776, 48), (3979, 79), (4180, 100)];
+            let approx = |value| {
+                if value < level_approx[0].0 {
+                    level_approx[0].1
+                } else {
+                    let mut ret = level_approx[level_approx.len() - 1].1;
+                    for i in 1..level_approx.len() {
+                        let prev = level_approx[i - 1];
+                        let val = level_approx[i];
+                        if value < val.0 {
+                            ret = prev.1 + (value - prev.0) * (val.1 - prev.1) / (val.0 - prev.0);
+                            break;
+                        }
+                    }
+                    ret
+                }
+            };
+
+            approx(voltage)
         } else {
             100
         }
