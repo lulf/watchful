@@ -113,6 +113,7 @@ pub enum MenuAction {
     Settings,
     FirmwareSettings,
     ValidateFirmware,
+    Reset,
 }
 
 #[derive(Clone, Copy)]
@@ -124,6 +125,7 @@ pub enum MenuView<'a> {
     },
     Settings {
         firmware: MenuItem<'a>,
+        reset: MenuItem<'a>,
     },
     Firmware {
         details: FirmwareDetails,
@@ -143,6 +145,7 @@ impl<'a> MenuView<'a> {
     pub fn settings() -> Self {
         Self::Settings {
             firmware: MenuItem::new("Firmware", 0),
+            reset: MenuItem::new("Reset", 2),
         }
     }
 
@@ -168,8 +171,9 @@ impl<'a> MenuView<'a> {
                 settings.draw(display)?;
             }
 
-            Self::Settings { firmware } => {
+            Self::Settings { firmware, reset } => {
                 firmware.draw(display)?;
+                reset.draw(display)?;
             }
 
             Self::Firmware { details, item } => {
@@ -198,9 +202,11 @@ impl<'a> MenuView<'a> {
                     None
                 }
             }
-            Self::Settings { firmware } => {
+            Self::Settings { firmware, reset } => {
                 if firmware.is_clicked(input) {
                     Some(MenuAction::FirmwareSettings)
+                } else if reset.is_clicked(input) {
+                    Some(MenuAction::Reset)
                 } else {
                     None
                 }

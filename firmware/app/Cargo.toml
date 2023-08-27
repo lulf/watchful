@@ -15,10 +15,10 @@ embassy-time = { version = "0.1.0", features = ["defmt", "defmt-timestamp-uptime
 embassy-nrf = { version = "0.1.0", features = ["defmt", "nrf52832", "time-driver-rtc1", "gpiote", "nightly", "unstable-pac", "time", "unstable-traits", "nfc-pins-as-gpio"] }
 embassy-boot-nrf = { version = "0.1.0", features = ["nightly"] }
 embassy-boot = { version = "0.1.0", features = ["nightly"] }
-embedded-io = "0.4.0"
+embedded-io = "0.5.0"
+embedded-io-async = "0.5.0"
 embedded-storage = "0.3.0"
-embedded-hal = "=1.0.0-alpha.11"
-embedded-hal-02 = { package = "embedded-hal", version = "0.2.6" }
+embedded-hal = "1.0.0-rc.1"
 nrf-dfu-target = { version = "0.1.0", features = ["defmt"] }
 pinetime-flash = { version = "0.1.0", path = "../../pinetime-flash", features = ["defmt"] }
 watchful-ui = { version = "0.1.0", path = "../../watchful-ui", features = ["defmt"] }

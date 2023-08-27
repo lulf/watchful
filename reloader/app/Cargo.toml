@@ -17,8 +17,7 @@ embassy-boot-nrf = { version = "0.1.0", features = ["nightly"] }
 embassy-boot = { version = "0.1.0", features = ["nightly"] }
 embedded-io = "0.4.0"
 embedded-storage = "0.3.0"
-embedded-hal = "=1.0.0-alpha.11"
-embedded-hal-02 = { package = "embedded-hal", version = "0.2.6" }
+embedded-hal = "1.0.0-rc.1"
 pinetime-flash = { version = "0.1.0", path = "../../pinetime-flash", features = ["defmt"] }
 
 defmt = "0.3"

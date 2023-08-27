@@ -403,7 +403,7 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embedded-hal 0.2.7",
- "embedded-hal 1.0.0-alpha.11",
+ "embedded-hal 1.0.0-rc.1",
  "embedded-hal-async",
  "embedded-storage",
  "embedded-storage-async",
@@ -413,6 +413,8 @@ dependencies = [
 [[package]]
 name = "embassy-executor"
 version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f1791d46f93d9b90bd557c09bbe8408a578bdcde240889bc773f1788c5c828b"
 dependencies = [
  "atomic-polyfill 1.0.3",
  "cortex-m 0.7.7",
@@ -434,12 +436,15 @@ version = "0.1.0"
 dependencies = [
  "cortex-m 0.7.7",
  "critical-section",
+ "defmt",
  "num-traits",
 ]
 
 [[package]]
 name = "embassy-macros"
-version = "0.2.0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94d3eef431adfc517df1601e367f72b1c28a51c6eb91def7dc297be7fc8789a4"
 dependencies = [
  "darling 0.20.3",
  "proc-macro2",
@@ -462,7 +467,7 @@ dependencies = [
  "embassy-time",
  "embassy-usb-driver",
  "embedded-hal 0.2.7",
- "embedded-hal 1.0.0-alpha.11",
+ "embedded-hal 1.0.0-rc.1",
  "embedded-hal-async",
  "embedded-io 0.5.0",
  "embedded-io-async",
@@ -503,7 +508,7 @@ dependencies = [
  "critical-section",
  "defmt",
  "embedded-hal 0.2.7",
- "embedded-hal 1.0.0-alpha.11",
+ "embedded-hal 1.0.0-rc.1",
  "futures-util",
  "heapless",
 ]
@@ -550,17 +555,17 @@ dependencies = [
 
 [[package]]
 name = "embedded-hal"
-version = "1.0.0-alpha.11"
+version = "1.0.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7724ebabcadfeb15920571dd727bc8ccde8586e52f2890bdb8182fdf42c3ff2"
+checksum = "2894bc2f0457b8ca3d6b8ab8aad64d9337583672494013457f86c5a9146c0e22"
 
 [[package]]
 name = "embedded-hal-async"
-version = "0.2.0-alpha.2"
+version = "1.0.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "918285ec7b18edb024d4adc64f6f16cdc7c4d72eadfc85c3313d1e0ff40e0229"
+checksum = "76a8a3517745342155b3b00895a0f78417a453fb800d97a8bf4777d5720acde9"
 dependencies = [
- "embedded-hal 1.0.0-alpha.11",
+ "embedded-hal 1.0.0-rc.1",
 ]
 
 [[package]]
@@ -1103,7 +1108,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.3.3",
  "defmt",
- "embedded-hal 1.0.0-alpha.11",
+ "embedded-hal 1.0.0-rc.1",
  "embedded-storage",
 ]
 
@@ -1436,9 +1441,9 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embedded-graphics",
- "embedded-hal 0.2.7",
- "embedded-hal 1.0.0-alpha.11",
- "embedded-io 0.4.0",
+ "embedded-hal 1.0.0-rc.1",
+ "embedded-io 0.5.0",
+ "embedded-io-async",
  "embedded-storage",
  "embedded-text",
  "futures",
@@ -1469,8 +1474,7 @@ dependencies = [
  "embassy-futures",
  "embassy-nrf",
  "embassy-sync",
- "embedded-hal 0.2.7",
- "embedded-hal 1.0.0-alpha.11",
+ "embedded-hal 1.0.0-rc.1",
  "embedded-io 0.4.0",
  "embedded-storage",
  "embedded-storage-async",
@@ -1493,3 +1497,7 @@ dependencies = [
  "time",
  "u8g2-fonts",
 ]
+
+[[patch.unused]]
+name = "embassy-executor"
+version = "0.3.0"

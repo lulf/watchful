@@ -14,8 +14,7 @@ embassy-boot-nrf = { version = "0.1.0", default-features = false, features = ["s
 embedded-io = "0.4.0"
 embedded-storage-async = "0.4.0"
 embedded-storage = "0.3.0"
-embedded-hal = "=1.0.0-alpha.11"
-embedded-hal-02 = { package = "embedded-hal", version = "0.2.6" }
+embedded-hal = "1.0.0-rc.1"
 nrf-softdevice-mbr = { version = "0.1.0" }
 pinetime-flash = { version = "0.1.0", path = "../../pinetime-flash" }
 

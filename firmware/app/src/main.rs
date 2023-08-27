@@ -145,7 +145,7 @@ async fn main(s: Spawner) {
     config.time_interrupt_priority = Priority::P2;
     let p = embassy_nrf::init(config);
 
-    let sd = enable_softdevice("Pinetime Embassy");
+    let sd = enable_softdevice("Watchful Embassy");
 
     static GATT: StaticCell<PineTimeServer> = StaticCell::new();
     let server = GATT.init(PineTimeServer::new(sd).unwrap());
@@ -162,7 +162,7 @@ async fn main(s: Spawner) {
     bat_config.time = saadc::Time::_40US;
     let adc_config = saadc::Config::default();
     let saadc = saadc::Saadc::new(p.SAADC, Irqs, adc_config, [bat_config]);
-    let mut battery = Battery::new(saadc, Input::new(p.P0_12.degrade(), Pull::Down));
+    let mut battery = Battery::new(saadc, Input::new(p.P0_12.degrade(), Pull::Up));
 
     // Touch peripheral
     let mut twim_config = twim::Config::default();
@@ -201,7 +201,7 @@ async fn main(s: Spawner) {
     let internal_flash = INTERNAL_FLASH.init(Mutex::new(internal_flash));
     let dfu_config = DfuConfig::new(internal_flash, external_flash);
 
-    s.spawn(advertiser_task(s, sd, server, dfu_config.clone(), "Pinetime Embassy"))
+    s.spawn(advertiser_task(s, sd, server, dfu_config.clone(), "Watchful Embassy"))
         .unwrap();
 
     // Medium backlight
@@ -246,8 +246,8 @@ async fn main(s: Spawner) {
                 defmt::info!("View time");
                 let mut now = CLOCK.get();
                 let mut battery_level = battery.measure().await;
-                let mut battery_enabled = battery.is_enabled();
-                TimeView::new(now, battery_level, battery_enabled)
+                let mut charging = battery.is_charging();
+                TimeView::new(now, battery_level, charging)
                     .draw(screen.display())
                     .unwrap();
                 screen.on();
@@ -257,13 +257,13 @@ async fn main(s: Spawner) {
                         Either3::First(_) => {
                             let t = CLOCK.get();
                             let b = battery.measure().await;
-                            let l = battery.is_enabled();
-                            if t.minute() != now.minute() || b != battery_level || l != battery_enabled {
+                            let l = battery.is_charging();
+                            if t.minute() != now.minute() || b != battery_level || l != charging {
                                 TimeView::new(t, b, l).draw(screen.display()).unwrap();
                             }
                             now = t;
                             battery_level = b;
-                            battery_enabled = l;
+                            charging = l;
                         }
                         Either3::Second(_) => {
                             state = WatchState::Idle;
@@ -342,6 +342,9 @@ async fn main(s: Spawner) {
                         MenuAction::Settings => {
                             state = WatchState::MenuView(MenuView::settings());
                         }
+                        MenuAction::Reset => {
+                            cortex_m::peripheral::SCB::sys_reset();
+                        }
                         MenuAction::FirmwareSettings => {
                             let validated =
                                 FwState::Boot == fw.get_state().await.expect("Failed to read firmware state");
@@ -401,27 +404,27 @@ impl Button {
 }
 
 pub struct Battery<'a> {
-    enabled: Input<'a, AnyPin>,
+    charging: Input<'a, AnyPin>,
     adc: saadc::Saadc<'a, 1>,
 }
 
 impl<'a> Battery<'a> {
-    pub fn new(adc: saadc::Saadc<'a, 1>, enabled: Input<'a, AnyPin>) -> Self {
-        Self { adc, enabled }
+    pub fn new(adc: saadc::Saadc<'a, 1>, charging: Input<'a, AnyPin>) -> Self {
+        Self { adc, charging }
     }
     pub async fn measure(&mut self) -> u32 {
-        if self.enabled.is_high() {
+        if self.charging.is_low() {
             let mut buf = [0i16; 1];
             self.adc.sample(&mut buf).await;
-            let voltage = (buf[0] * 2000 / 1241) as u32;
+            let voltage = buf[0] as u32 * 2000 / 1241;
             100 * voltage / 3300
         } else {
             100
         }
     }
 
-    pub fn is_enabled(&self) -> bool {
-        self.enabled.is_high()
+    pub fn is_charging(&self) -> bool {
+        self.charging.is_low()
     }
 }
 pub enum WatchState<'a> {
