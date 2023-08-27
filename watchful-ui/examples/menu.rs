@@ -36,7 +36,7 @@ fn main() -> Result<(), core::convert::Infallible> {
 
     let mut display = SimulatorDisplay::<Rgb>::new(Size::new(240, 240));
     let t = time::OffsetDateTime::now_utc();
-    let view = TimeView::new(time::PrimitiveDateTime::new(t.date(), t.time()), 75, true);
+    let view = TimeView::new(time::PrimitiveDateTime::new(t.date(), t.time()), 5, false);
     view.draw(&mut display)?;
     Window::new("Time", &output_settings).show_static(&display);
     Ok(())

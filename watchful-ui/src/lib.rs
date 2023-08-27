@@ -2,10 +2,12 @@
 
 use core::fmt::Write as _;
 
+use embedded_graphics::image::Image;
 use embedded_graphics::pixelcolor::Rgb565 as Rgb;
 use embedded_graphics::prelude::{DrawTarget, *};
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::{Text, TextStyleBuilder};
+use embedded_iconoir::prelude::*;
 use embedded_layout::layout::linear::LinearLayout;
 use embedded_layout::prelude::*;
 use embedded_text::style::TextBoxStyleBuilder;
@@ -84,23 +86,25 @@ impl TimeView {
             .draw(display)?;
 
         let display_area = display_area.offset(-5);
-        buf.clear();
+        let top_right_y = display_area.top_left.y;
+        let top_right_x = display_area.top_left.x + display_area.size.width as i32 - 30;
+        let pos = Point::new(top_right_x, top_right_y);
         if self.battery_charging {
-            write!(buf, "(Charging) {}%", self.battery_level).unwrap();
+            Image::new(&icons::size24px::system::BatteryCharging::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
         } else {
-            write!(buf, "{}%", self.battery_level).unwrap();
-        }
+            if self.battery_level > 85 {
+                Image::new(&icons::size24px::system::BatteryFull::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
+            } else if self.battery_level > 65 {
+                Image::new(&icons::size24px::system::BatterySevenFive::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
+            } else if self.battery_level > 35 {
+                Image::new(&icons::size24px::system::BatteryFiveZero::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
+            } else if self.battery_level > 10 {
+                Image::new(&icons::size24px::system::BatteryTwoFive::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
+            } else {
+                Image::new(&icons::size24px::system::BatteryEmpty::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
+            }
+        };
 
-        LinearLayout::vertical(Chain::new(Text::with_text_style(
-            &buf,
-            display_area.center(),
-            text_text_style(Rgb::CSS_DARK_CYAN),
-            TextStyleBuilder::new().build(),
-        )))
-        .with_alignment(horizontal::Right)
-        .arrange()
-        .align_to(&display_area, horizontal::Right, vertical::Top)
-        .draw(display)?;
         Ok(())
     }
 }
