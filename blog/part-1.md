@@ -130,15 +130,15 @@ You might wonder why the reloader has a bootloader. If you look at the linker sc
 To build the reloader, first a hex file of both the boot and app is made:
 
 ```
-cd app && cargo objcopy --release -- -O ihex app.hex
-cd boot && cargo objcopy --release -- -O ihex boot.hex
-mergehex -m boot/boot.hex app/app.hex -o combined.bin
+cd reloader/app && cargo objcopy --release -- -O ihex app.hex
+cd reloader/boot && cargo objcopy --release -- -O ihex boot.hex
+mergehex -m reloader/boot/boot.hex reloader/app/app.hex -o reloader.bin
 ```
 
-Then, the `imgtool.py` tool from MCUBoot is used to create an "image" that can be loaded by MCUBoot:
+Then, the `imgtool` tool from MCUBoot is used to create an image that can be loaded by MCUBoot:
 
 ```
-imgtool.py create --align 4 --version 1.0.0 --header-size 32 --slot-size 475136 --pad-header combined.bin watchful-reloader-image.bin
+imgtool create --align 4 --version 1.0.0 --header-size 32 --slot-size 475136 --pad-header reloader.bin watchful-reloader-image.bin
 ```
 
 The final step is to create a nRF DFU package with the image: 
@@ -147,3 +147,4 @@ The final step is to create a nRF DFU package with the image:
 adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application watchful-reloader-image.bin watchful-reloader-dfu.zip
 ```
 
+And voilla, you have an MCUBoot image that you can use to brick your PineTime or successfully update to use Watchful.
