@@ -1,3 +1,5 @@
+[![CI](https://github.com/lulf/watchful/actions/workflows/ci.yaml/badge.svg)](https://github.com/lulf/watchful/actions/workflows/ci.yaml)
+
 # Watchful
 
 (Anagram for _ulfwatch_)
@@ -7,6 +9,14 @@ Real Time Async Enterprise Watch OS written in Rust!
 Firmware for Pinetime based on [Embassy](https://embassy.dev). The goal is to provide a firmware for the PineTime that is written in Rust and can function as watch OS.
 
 <img src="image.png" alt="PineTime on my arm running Watchful" style="width:200px;"/>
+
+## Features 
+
+* Implements Nordic DFU protocol so you can update from a phone app such as nRF Connect.
+* Automatically synchronizes time with using BLE standard Current Time Service.
+* Use external flash (4MB) for firmware updates and persistence.
+* Rollback to previous firmware if reset or crashing before new firmware is validated in watch UI.
+* Can be installed from Infinitime using DFU.
 
 ## Getting started
 
@@ -40,19 +50,3 @@ With that out of the way,
 * Update your PineTime to Infinity 1.13.0
 * Download the `watchful-reloader` from the [latest release](https://github.com/lulf/watchful/releases)
 * Use whatever [update mechanism that works with InfiniTime](https://github.com/InfiniTimeOrg/InfiniTime/blob/main/doc/gettingStarted/updating-software.md).
-
-TODO:
-
-* [x] Implement Nordic DFU protocol (version supported by Gadgetbridge and SDK 15.x) (moved to [nrf-dfu-target](https://crates.io/crates/nrf-dfu-target) crate)
-* [x] Synchronize watch with phone
-* [x] Use external flash for firmware and persistence
-* [x] Update firmware over DFU and validate in UI
-* [x] Support installing from Infinitime 'factory firmware'
-* [ ] Support swapping back to Inifinitime + MCUBoot
-* [x] Show clock in view mode
-* [x] View for viewing and validating firmware
-* [ ] Low power in idle mode
-* [ ] Menu for starting workout or finding phone
-* [ ] Workout tracking mode
-* [ ] Record and export of workout data
-* [ ] Finding phone mode 
