@@ -14,7 +14,7 @@ use embassy_executor::Spawner;
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pin, Pull};
 use embassy_nrf::interrupt::Priority;
-use embassy_nrf::peripherals::{P0_05, P0_18, P0_25, P0_26, TWISPI0};
+use embassy_nrf::peripherals::{P0_05, P0_10, P0_18, P0_25, P0_26, P0_28, TWISPI0, TWISPI1};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::{bind_interrupts, pac, peripherals, saadc, spim, twim};
@@ -37,8 +37,9 @@ use static_cell::StaticCell;
 use watchful_ui::{FirmwareDetails, MenuAction, MenuView, TimeView};
 
 mod clock;
+mod display_interface;
 use crate::clock::clock;
-use crate::my_display_interface::SPIDeviceInterface;
+use crate::display_interface::SPIDeviceInterface;
 
 bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
@@ -67,78 +68,7 @@ type Display = mipidsi::Display<
 type InternalFlash = nrf_softdevice::Flash;
 type StatePartition<'a> = Partition<'a, NoopRawMutex, InternalFlash>;
 type DfuPartition<'a> = BlockingPartition<'a, NoopRawMutex, ExternalFlash>;
-
-#[derive(Clone)]
-pub struct DfuConfig<'a> {
-    internal: &'a Mutex<NoopRawMutex, InternalFlash>,
-    external: &'a BMutex<NoopRawMutex, RefCell<ExternalFlash>>,
-    state_start: u32,
-    state_end: u32,
-    dfu_start: u32,
-    dfu_end: u32,
-}
-
-impl<'a> DfuConfig<'a> {
-    pub fn new(
-        internal: &'a Mutex<NoopRawMutex, InternalFlash>,
-        external: &'a BMutex<NoopRawMutex, RefCell<ExternalFlash>>,
-    ) -> Self {
-        extern "C" {
-            static __bootloader_state_start: u32;
-            static __bootloader_state_end: u32;
-            static __bootloader_dfu_start: u32;
-            static __bootloader_dfu_end: u32;
-        }
-
-        unsafe {
-            let dfu_start = &__bootloader_dfu_start as *const u32 as u32;
-            let dfu_end = &__bootloader_dfu_end as *const u32 as u32;
-
-            BlockingPartition::new(external, dfu_start, dfu_end - dfu_start);
-
-            let state_start = &__bootloader_state_start as *const u32 as u32;
-            let state_end = &__bootloader_state_end as *const u32 as u32;
-
-            Partition::new(internal, state_start, state_end - state_start);
-            Self {
-                internal,
-                external,
-                state_start,
-                state_end,
-                dfu_start,
-                dfu_end,
-            }
-        }
-    }
-
-    pub fn state(&self) -> StatePartition<'a> {
-        StatePartition::new(self.internal, self.state_start, self.state_end - self.state_start)
-    }
-
-    pub fn dfu(&self) -> DfuPartition<'a> {
-        DfuPartition::new(self.external, self.dfu_start, self.dfu_end - self.dfu_start)
-    }
-}
-
-async fn firmware_details(battery: &mut Battery<'_>, validated: bool) -> FirmwareDetails {
-    const CARGO_NAME: &str = env!("CARGO_PKG_NAME");
-    const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
-    const COMMIT: &str = env!("VERGEN_GIT_SHA");
-    const BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
-
-    let battery_level = battery.measure().await;
-    let battery_charging = battery.is_charging();
-
-    FirmwareDetails::new(
-        CARGO_NAME,
-        CARGO_VERSION,
-        COMMIT,
-        BUILD_TIMESTAMP,
-        battery_level,
-        battery_charging,
-        validated,
-    )
-}
+type Touchpad<'a> = cst816s::CST816S<twim::Twim<'a, TWISPI1>, Input<'a, P0_28>, Output<'a, P0_10>>;
 
 use core::panic::PanicInfo;
 
@@ -211,188 +141,172 @@ async fn main(s: Spawner) {
     let internal_flash = nrf_softdevice::Flash::take(sd);
     static INTERNAL_FLASH: StaticCell<Mutex<NoopRawMutex, InternalFlash>> = StaticCell::new();
     let internal_flash = INTERNAL_FLASH.init(Mutex::new(internal_flash));
-    let dfu_config = DfuConfig::new(internal_flash, external_flash);
 
+    // DFU setup
+    let dfu_config = DfuConfig::new(internal_flash, external_flash);
+    let mut magic = AlignedBuffer([0; 4]);
+    let mut fw = FirmwareState::new(dfu_config.state(), &mut magic.0);
+
+    // Display
     s.spawn(advertiser_task(s, sd, server, dfu_config.clone(), "Watchful Embassy"))
         .unwrap();
 
-    // Medium backlight
-    let backlight = Output::new(p.P0_22.degrade(), Level::Low, OutputDrive::Standard);
-
-    // Reset pin
+    let backlight = Output::new(p.P0_22.degrade(), Level::Low, OutputDrive::Standard); // Medium backlight
     let rst = Output::new(p.P0_26, Level::Low, OutputDrive::Standard);
-
-    // Keep low while driving display
-    let display_cs = Output::new(p.P0_25, Level::High, OutputDrive::Standard);
-
-    // Create a DisplayInterface from SPI and DC pin.
+    let display_cs = Output::new(p.P0_25, Level::High, OutputDrive::Standard); // Keep low while driving display
     let display_spi = SpiDevice::new(spi_bus, display_cs);
-
-    // Data/clock
-    let dc = Output::new(p.P0_18, Level::Low, OutputDrive::Standard);
-
+    let dc = Output::new(p.P0_18, Level::Low, OutputDrive::Standard); // Data/clock
     let di = SPIDeviceInterface::new(display_spi, dc);
-
     // create the ILI9486 display driver from the display interface and optional RST pin
     let mut display = mipidsi::Builder::st7789(di)
         .with_display_size(240, 240)
         .with_invert_colors(mipidsi::ColorInversion::Inverted)
         .init(&mut Delay, Some(rst))
         .unwrap();
-
     display.set_orientation(mipidsi::Orientation::Portrait(false)).unwrap();
-    let mut screen = Screen::new(display, backlight);
 
-    let mut magic = AlignedBuffer([0; 4]);
-    let mut fw = FirmwareState::new(dfu_config.state(), &mut magic.0);
+    let mut screen = Screen::new(display, backlight);
     let mut state = WatchState::Idle;
     loop {
-        match state {
-            WatchState::Idle => {
-                defmt::info!("Idle");
-                screen.off();
-                btn.wait().await;
-                state = WatchState::TimeView;
-            }
-            WatchState::TimeView => {
-                defmt::info!("View time");
-                let mut now = CLOCK.get();
-                let mut battery_level = battery.measure().await;
-                let mut charging = battery.is_charging();
-                TimeView::new(now, battery_level, charging)
-                    .draw(screen.display())
-                    .unwrap();
-                screen.on();
-                let mut timeout = Timer::after(Duration::from_secs(10));
-                loop {
-                    match select3(Timer::after(Duration::from_secs(1)), &mut timeout, btn.wait()).await {
-                        Either3::First(_) => {
-                            let t = CLOCK.get();
-                            let b = battery.measure().await;
-                            let l = battery.is_charging();
-                            if t.minute() != now.minute() || b != battery_level || l != charging {
-                                TimeView::new(t, b, l).draw(screen.display()).unwrap();
-                            }
-                            now = t;
-                            battery_level = b;
-                            charging = l;
-                        }
-                        Either3::Second(_) => {
-                            state = WatchState::Idle;
-                            break;
-                        }
-                        Either3::Third(_) => {
-                            state = WatchState::MenuView(MenuView::main());
-                            break;
-                        }
+        let next = state
+            .process(&mut screen, &mut btn, &mut battery, &mut fw, &mut touchpad)
+            .await;
+        defmt::info!("{:?} -> {:?}", state, next);
+        state = next;
+    }
+}
+
+impl<'a> WatchState<'a> {
+    async fn idle(&mut self, screen: &mut Screen, button: &mut Button) -> WatchState<'a> {
+        screen.off();
+        button.wait().await;
+        WatchState::TimeView
+    }
+
+    pub async fn time(
+        &mut self,
+        screen: &mut Screen,
+        button: &mut Button,
+        battery: &mut Battery<'_>,
+    ) -> WatchState<'a> {
+        let mut timeout = Timer::after(Duration::from_secs(10));
+        let mut now = CLOCK.get();
+        let mut battery_level = battery.measure().await;
+        let mut charging = battery.is_charging();
+        TimeView::new(now, battery_level, charging)
+            .draw(screen.display())
+            .unwrap();
+        screen.on();
+        loop {
+            match select3(Timer::after(Duration::from_secs(1)), &mut timeout, button.wait()).await {
+                Either3::First(_) => {
+                    let t = CLOCK.get();
+                    let b = battery.measure().await;
+                    let l = battery.is_charging();
+                    if t.minute() != now.minute() || b != battery_level || l != charging {
+                        TimeView::new(t, b, l).draw(screen.display()).unwrap();
                     }
+                    now = t;
+                    battery_level = b;
+                    charging = l;
                 }
+                Either3::Second(_) => {
+                    return WatchState::Idle;
+                }
+                Either3::Third(_) => return WatchState::MenuView(MenuView::main()),
             }
-            /*
-            WatchState::LoggerView => {
-                if let Ok(logger) = &mut logger {
-                    loop {
-                        match select(btn.wait(), logger.wait_for_log()).await {
-                            Either::First(_) => {
-                                state = WatchState::Idle;
-                                break;
-                            }
-                            Either::Second(grant) => {
-                                view.update(&grant);
-                                view.draw(screen.display()).unwrap();
-                                screen.on();
-                            }
+        }
+    }
+
+    pub async fn menu(
+        &mut self,
+        screen: &mut Screen,
+        button: &mut Button,
+        battery: &mut Battery<'_>,
+        fw: &mut FirmwareState<'_, StatePartition<'_>>,
+        touchpad: &mut Touchpad<'_>,
+        view: &mut MenuView<'_>,
+    ) -> WatchState<'a> {
+        let mut timeout = Timer::after(Duration::from_secs(10));
+        view.draw(screen.display()).unwrap();
+        screen.on();
+
+        match select3(&mut timeout, button.wait(), async {
+            let selected;
+            loop {
+                if let Some(evt) = touchpad.read_one_touch_event(true) {
+                    if let cst816s::TouchGesture::SingleClick = evt.gesture {
+                        let touched = Point::new(evt.x, evt.y);
+                        if let Some(s) = view.on_event(watchful_ui::InputEvent::Touch(
+                            watchful_ui::TouchGesture::SingleTap(touched),
+                        )) {
+                            selected = s;
+                            break;
                         }
                     }
                 } else {
-                    state = WatchState::Idle;
+                    Timer::after(Duration::from_micros(1)).await;
                 }
-            }*/
-            WatchState::MenuView(menu) => {
-                menu.draw(screen.display()).unwrap();
-                screen.on();
-
-                match select(btn.wait(), async {
-                    let selected;
-                    loop {
-                        if let Some(evt) = touchpad.read_one_touch_event(true) {
-                            if let cst816s::TouchGesture::SingleClick = evt.gesture {
-                                let touched = Point::new(evt.x, evt.y);
-                                if let Some(s) = menu.on_event(watchful_ui::InputEvent::Touch(
-                                    watchful_ui::TouchGesture::SingleTap(touched),
-                                )) {
-                                    selected = s;
-                                    break;
-                                }
-                            }
-                        } else {
-                            Timer::after(Duration::from_micros(1)).await;
-                        }
-                    }
-                    selected
-                })
-                .await
-                {
-                    Either::First(_) => {
-                        if let MenuView::Settings { .. } = menu {
-                            state = WatchState::MenuView(MenuView::main());
-                        } else if let MenuView::Firmware { .. } = menu {
-                            state = WatchState::MenuView(MenuView::settings());
-                        } else {
-                            state = WatchState::TimeView;
-                        }
-                    }
-                    Either::Second(selected) => match selected {
-                        MenuAction::Workout => {
-                            defmt::info!("Not implemented");
-                            state = WatchState::TimeView;
-                        }
-                        MenuAction::FindPhone => {
-                            defmt::info!("Not implemented");
-                            state = WatchState::TimeView;
-                        }
-                        MenuAction::Settings => {
-                            state = WatchState::MenuView(MenuView::settings());
-                        }
-                        MenuAction::Reset => {
-                            cortex_m::peripheral::SCB::sys_reset();
-                        }
-                        MenuAction::FirmwareSettings => {
-                            let validated =
-                                FwState::Boot == fw.get_state().await.expect("Failed to read firmware state");
-                            state = WatchState::MenuView(MenuView::firmware_settings(
-                                firmware_details(&mut battery, validated).await,
-                            ));
-                        }
-                        MenuAction::ValidateFirmware => {
-                            info!("Validate firmware");
-                            let validated =
-                                FwState::Boot == fw.get_state().await.expect("Failed to read firmware state");
-                            if !validated {
-                                fw.mark_booted().await.expect("Failed to mark current firmware as good");
-                                info!("Firmware marked as valid");
-                                state = WatchState::MenuView(MenuView::main());
-                            } else {
-                                state = WatchState::MenuView(MenuView::firmware_settings(
-                                    firmware_details(&mut battery, validated).await,
-                                ));
-                            }
-                        }
-                    },
+            }
+            selected
+        })
+        .await
+        {
+            Either3::First(_) => WatchState::Idle,
+            Either3::Second(_) => {
+                if let MenuView::Settings { .. } = view {
+                    WatchState::MenuView(MenuView::main())
+                } else if let MenuView::Firmware { .. } = view {
+                    WatchState::MenuView(MenuView::settings())
+                } else {
+                    WatchState::TimeView
                 }
-            } /*
-              WatchState::Workout => {
-                  // start pulse reading
-                  // start accelerometer reading
-                  // display exercise view
-                  // refresh display until timout (go black)
-              }
-              WatchState::FindPhone => {
-                  // try connecting to phone over BLE
-                  // tell phone to make some noise
-              }*/
+            }
+            Either3::Third(selected) => match selected {
+                MenuAction::Workout => {
+                    defmt::info!("Not implemented");
+                    WatchState::TimeView
+                }
+                MenuAction::FindPhone => {
+                    defmt::info!("Not implemented");
+                    WatchState::TimeView
+                }
+                MenuAction::Settings => WatchState::MenuView(MenuView::settings()),
+                MenuAction::Reset => {
+                    cortex_m::peripheral::SCB::sys_reset();
+                }
+                MenuAction::FirmwareSettings => {
+                    let validated = FwState::Boot == fw.get_state().await.expect("Failed to read firmware state");
+                    WatchState::MenuView(MenuView::firmware_settings(firmware_details(battery, validated).await))
+                }
+                MenuAction::ValidateFirmware => {
+                    info!("Validate firmware");
+                    let validated = FwState::Boot == fw.get_state().await.expect("Failed to read firmware state");
+                    if !validated {
+                        fw.mark_booted().await.expect("Failed to mark current firmware as good");
+                        info!("Firmware marked as valid");
+                        WatchState::MenuView(MenuView::main())
+                    } else {
+                        WatchState::MenuView(MenuView::firmware_settings(firmware_details(battery, validated).await))
+                    }
+                }
+            },
         }
-        // Main is the 'idle task'
+    }
+
+    pub async fn process(
+        &mut self,
+        screen: &mut Screen,
+        button: &mut Button,
+        battery: &mut Battery<'_>,
+        fw: &mut FirmwareState<'_, StatePartition<'_>>,
+        touchpad: &mut Touchpad<'_>,
+    ) -> WatchState<'a> {
+        match self {
+            WatchState::Idle => self.idle(screen, button).await,
+            WatchState::TimeView => self.time(screen, button, battery).await,
+            WatchState::MenuView(mut menu) => self.menu(screen, button, battery, fw, touchpad, &mut menu).await,
+        }
     }
 }
 
@@ -446,6 +360,16 @@ pub enum WatchState<'a> {
     MenuView(MenuView<'a>),
     //  FindPhone,
     //  Workout,
+}
+
+impl<'a> defmt::Format for WatchState<'a> {
+    fn format(&self, fmt: defmt::Formatter) {
+        match self {
+            Self::Idle => defmt::write!(fmt, "Idle"),
+            Self::TimeView => defmt::write!(fmt, "TimeView"),
+            Self::MenuView(_) => defmt::write!(fmt, "MenuView"),
+        }
+    }
 }
 
 #[nrf_softdevice::gatt_service(uuid = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")]
@@ -792,139 +716,76 @@ async fn exercise(signal: StopSignal, tracker: HealthTracker) {
 }
 */
 
-mod my_display_interface {
-    use display_interface::{DataFormat, DisplayError, WriteOnlyDataCommand};
-    use embedded_hal::digital::OutputPin;
-    use embedded_hal::spi::SpiDevice;
+#[derive(Clone)]
+pub struct DfuConfig<'a> {
+    internal: &'a Mutex<NoopRawMutex, InternalFlash>,
+    external: &'a BMutex<NoopRawMutex, RefCell<ExternalFlash>>,
+    state_start: u32,
+    state_end: u32,
+    dfu_start: u32,
+    dfu_end: u32,
+}
 
-    /// SPI display interface.
-    ///
-    /// This combines the SPI peripheral and a data/command pin
-    pub struct SPIDeviceInterface<SPI, DC> {
-        spi: SPI,
-        dc: DC,
-    }
+impl<'a> DfuConfig<'a> {
+    pub fn new(
+        internal: &'a Mutex<NoopRawMutex, InternalFlash>,
+        external: &'a BMutex<NoopRawMutex, RefCell<ExternalFlash>>,
+    ) -> Self {
+        extern "C" {
+            static __bootloader_state_start: u32;
+            static __bootloader_state_end: u32;
+            static __bootloader_dfu_start: u32;
+            static __bootloader_dfu_end: u32;
+        }
 
-    impl<SPI, DC> SPIDeviceInterface<SPI, DC>
-    where
-        SPI: SpiDevice,
-        DC: OutputPin,
-    {
-        /// Create new SPI interface for communciation with a display driver
-        pub fn new(spi: SPI, dc: DC) -> Self {
-            Self { spi, dc }
+        unsafe {
+            let dfu_start = &__bootloader_dfu_start as *const u32 as u32;
+            let dfu_end = &__bootloader_dfu_end as *const u32 as u32;
+
+            BlockingPartition::new(external, dfu_start, dfu_end - dfu_start);
+
+            let state_start = &__bootloader_state_start as *const u32 as u32;
+            let state_end = &__bootloader_state_end as *const u32 as u32;
+
+            Partition::new(internal, state_start, state_end - state_start);
+            Self {
+                internal,
+                external,
+                state_start,
+                state_end,
+                dfu_start,
+                dfu_end,
+            }
         }
     }
 
-    impl<SPI, DC> WriteOnlyDataCommand for SPIDeviceInterface<SPI, DC>
-    where
-        SPI: SpiDevice,
-        DC: OutputPin,
-    {
-        fn send_commands(&mut self, cmds: DataFormat<'_>) -> Result<(), DisplayError> {
-            // 1 = data, 0 = command
-            self.dc.set_low().map_err(|_| DisplayError::DCError)?;
-
-            send_u8(&mut self.spi, cmds).map_err(|_| DisplayError::BusWriteError)?;
-            Ok(())
-        }
-
-        fn send_data(&mut self, buf: DataFormat<'_>) -> Result<(), DisplayError> {
-            // 1 = data, 0 = command
-            self.dc.set_high().map_err(|_| DisplayError::DCError)?;
-
-            send_u8(&mut self.spi, buf).map_err(|_| DisplayError::BusWriteError)?;
-            Ok(())
-        }
+    pub fn state(&self) -> StatePartition<'a> {
+        StatePartition::new(self.internal, self.state_start, self.state_end - self.state_start)
     }
 
-    fn send_u8<T: SpiDevice>(spi: &mut T, words: DataFormat<'_>) -> Result<(), T::Error> {
-        match words {
-            DataFormat::U8(slice) => spi.write(slice),
-            DataFormat::U16(slice) => {
-                use byte_slice_cast::*;
-                spi.write(slice.as_byte_slice())
-            }
-            DataFormat::U16LE(slice) => {
-                use byte_slice_cast::*;
-                for v in slice.as_mut() {
-                    *v = v.to_le();
-                }
-                spi.write(slice.as_byte_slice())
-            }
-            DataFormat::U16BE(slice) => {
-                use byte_slice_cast::*;
-                for v in slice.as_mut() {
-                    *v = v.to_be();
-                }
-                spi.write(slice.as_byte_slice())
-            }
-            DataFormat::U8Iter(iter) => {
-                let mut buf = [0; 32];
-                let mut i = 0;
-
-                for v in iter.into_iter() {
-                    buf[i] = v;
-                    i += 1;
-
-                    if i == buf.len() {
-                        spi.write(&buf)?;
-                        i = 0;
-                    }
-                }
-
-                if i > 0 {
-                    spi.write(&buf[..i])?;
-                }
-
-                Ok(())
-            }
-            DataFormat::U16LEIter(iter) => {
-                use byte_slice_cast::*;
-                let mut buf = [0; 32];
-                let mut i = 0;
-
-                for v in iter.map(u16::to_le) {
-                    buf[i] = v;
-                    i += 1;
-
-                    if i == buf.len() {
-                        spi.write(&buf.as_byte_slice())?;
-                        i = 0;
-                    }
-                }
-
-                if i > 0 {
-                    spi.write(&buf[..i].as_byte_slice())?;
-                }
-
-                Ok(())
-            }
-            DataFormat::U16BEIter(iter) => {
-                use byte_slice_cast::*;
-                let mut buf = [0; 64];
-                let mut i = 0;
-                let len = buf.len();
-
-                for v in iter.map(u16::to_be) {
-                    buf[i] = v;
-                    i += 1;
-
-                    if i == len {
-                        spi.write(&buf.as_byte_slice())?;
-                        i = 0;
-                    }
-                }
-
-                if i > 0 {
-                    spi.write(&buf[..i].as_byte_slice())?;
-                }
-
-                Ok(())
-            }
-            _ => unimplemented!(),
-        }
+    pub fn dfu(&self) -> DfuPartition<'a> {
+        DfuPartition::new(self.external, self.dfu_start, self.dfu_end - self.dfu_start)
     }
+}
+
+async fn firmware_details(battery: &mut Battery<'_>, validated: bool) -> FirmwareDetails {
+    const CARGO_NAME: &str = env!("CARGO_PKG_NAME");
+    const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
+    const COMMIT: &str = env!("VERGEN_GIT_SHA");
+    const BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
+
+    let battery_level = battery.measure().await;
+    let battery_charging = battery.is_charging();
+
+    FirmwareDetails::new(
+        CARGO_NAME,
+        CARGO_VERSION,
+        COMMIT,
+        BUILD_TIMESTAMP,
+        battery_level,
+        battery_charging,
+        validated,
+    )
 }
 
 pub struct Screen {
