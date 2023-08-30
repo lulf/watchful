@@ -18,12 +18,6 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v3
-      - name: Install prerequisites
-        if: github.ref == 'refs/heads/main'
-        run: |
-          pip3 install adafruit-nrfutil
-          cargo install cargo-binutils
-
       - name: Build
         run: |
           for p in firmware/boot firmware/app pinetime-flash watchful-ui; do
@@ -32,31 +26,38 @@ jobs:
             popd;
           done
 
+  publish:
+    runs-on: ubuntu-22.04
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install prerequisites
+        run: |
+          pip3 install adafruit-nrfutil
+          cargo install cargo-binutils
+
       - name: Build release artifacts
-        if: github.ref == 'refs/heads/main'
         run: |
           cd firmware/app
+          cargo build --release
           cargo objcopy --release -- -O binary watchful.bin
           cargo objcopy --release -- -O ihex watchful.hex
           adafruit-nrfutil dfu genpkg --application watchful.hex watchful-dfu.zip
 
       - name: Upload binary
         uses: actions/upload-artifact@v3
-        if: github.ref == 'refs/heads/main'
         with:
           name: watchful.bin
           path: firmware/app/watchful.bin
 
       - name: Upload HEX
         uses: actions/upload-artifact@v3
-        if: github.ref == 'refs/heads/main'
         with:
           name: watchful.hex
           path: firmware/app/watchful.hex
 
       - name: Upload DFU bundle
         uses: actions/upload-artifact@v3
-        if: github.ref == 'refs/heads/main'
         with:
           name: watchful.hex
           path: firmware/app/watchful-dfu.zip
