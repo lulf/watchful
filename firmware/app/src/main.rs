@@ -54,6 +54,7 @@ const ATT_MTU: usize = MTU + 3;
 type Target = DfuTarget<256>;
 
 static CLOCK: clock::Clock = clock::Clock::new();
+const IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 type ExternalFlash = XtFlash<SpiDevice<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static, P0_05>>>;
 type Display = mipidsi::Display<
@@ -189,7 +190,7 @@ impl<'a> WatchState<'a> {
         button: &mut Button,
         battery: &mut Battery<'_>,
     ) -> WatchState<'a> {
-        let mut timeout = Timer::after(Duration::from_secs(10));
+        let mut timeout = Timer::after(IDLE_TIMEOUT);
         let mut now = CLOCK.get();
         let mut battery_level = battery.measure().await;
         let mut charging = battery.is_charging();
@@ -227,7 +228,7 @@ impl<'a> WatchState<'a> {
         touchpad: &mut Touchpad<'_>,
         view: &mut MenuView<'_>,
     ) -> WatchState<'a> {
-        let mut timeout = Timer::after(Duration::from_secs(10));
+        let mut timeout = Timer::after(IDLE_TIMEOUT);
         view.draw(screen.display()).unwrap();
         screen.on();
 
