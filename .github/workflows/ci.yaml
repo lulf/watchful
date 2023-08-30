@@ -42,7 +42,7 @@ jobs:
           cargo build --release
           cargo objcopy --release -- -O binary watchful.bin
           cargo objcopy --release -- -O ihex watchful.hex
-          adafruit-nrfutil dfu genpkg --application watchful.hex watchful-dfu.zip
+          adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application watchful.bin watchful-dfu.zip
 
       - name: Upload binary
         uses: actions/upload-artifact@v3
