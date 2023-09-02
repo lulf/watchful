@@ -8,7 +8,7 @@ use embedded_graphics::prelude::{DrawTarget, *};
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::{Text, TextStyleBuilder};
 use embedded_iconoir::prelude::*;
-use embedded_layout::layout::linear::LinearLayout;
+use embedded_layout::layout::linear::{spacing, LinearLayout};
 use embedded_layout::prelude::*;
 use embedded_text::style::TextBoxStyleBuilder;
 use embedded_text::TextBox;
@@ -27,6 +27,10 @@ fn watch_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
 fn menu_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
     //U8g2TextStyle::new(fonts::u8g2_font_unifont_t_symbols, Rgb::YELLOW)
     U8g2TextStyle::new(fonts::u8g2_font_spleen16x32_mf, color)
+}
+
+fn date_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
+    U8g2TextStyle::new(fonts::u8g2_font_spleen12x24_mf, color)
 }
 
 fn text_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
@@ -69,17 +73,36 @@ impl TimeView {
     }
     pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
         display.clear(Rgb::BLACK)?;
-        let character_style = watch_text_style(Rgb::CSS_DARK_CYAN);
-        let text_style = TextStyleBuilder::new()
-            .alignment(embedded_graphics::text::Alignment::Center)
-            .baseline(embedded_graphics::text::Baseline::Alphabetic)
-            .build();
 
         let mut buf: heapless::String<16> = heapless::String::new();
         write!(buf, "{:02}:{:02}", self.time.hour(), self.time.minute()).unwrap();
-        let text = Text::with_text_style(&buf, display.bounding_box().center(), character_style, text_style);
+        let hm = Text::with_text_style(
+            &buf,
+            display.bounding_box().center(),
+            watch_text_style(Rgb::CSS_DARK_CYAN),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .baseline(embedded_graphics::text::Baseline::Alphabetic)
+                .build(),
+        );
+
+        let mut buf: heapless::String<16> = heapless::String::new();
+        write!(buf, "{}", self.time.weekday()).unwrap();
+        buf.truncate(3);
+        write!(buf, " {}", self.time.day()).unwrap();
+        let date = Text::with_text_style(
+            &buf,
+            display.bounding_box().center(),
+            date_text_style(Rgb::CSS_DARK_CYAN),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .baseline(embedded_graphics::text::Baseline::Alphabetic)
+                .build(),
+        );
+
         let display_area = display.bounding_box();
-        LinearLayout::vertical(Chain::new(text))
+        LinearLayout::vertical(Chain::new(date).append(hm))
+            .with_spacing(spacing::FixedMargin(10))
             .with_alignment(horizontal::Center)
             .arrange()
             .align_to(&display_area, horizontal::Center, vertical::Center)

@@ -29,6 +29,8 @@ fn main() -> Result<(), core::convert::Infallible> {
         "0.1.0",
         "abcdefg",
         "2021-02-19T21:32:22.932833758+00:00",
+        33,
+        false,
         false,
     ));
     view.draw(&mut display)?;
