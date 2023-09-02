@@ -824,6 +824,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hrs3300"
+version = "0.1.0"
+source = "git+https://github.com/lulf/hrs3300-rs.git?branch=hal-1.0#5f9cb751538df4db662071af36ab5f70553c2fda"
+dependencies = [
+ "embedded-hal 1.0.0-rc.1",
+]
+
+[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1474,7 +1482,7 @@ dependencies = [
 
 [[package]]
 name = "watchful"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "byte-slice-cast 1.2.2",
  "cortex-m 0.7.7",
@@ -1500,6 +1508,7 @@ dependencies = [
  "embedded-text",
  "futures",
  "heapless",
+ "hrs3300",
  "mipidsi",
  "nrf-dfu-target",
  "nrf-softdevice",

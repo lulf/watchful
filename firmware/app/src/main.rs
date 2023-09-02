@@ -9,6 +9,7 @@ use defmt_rtt as _;
 use embassy_boot::State as FwState;
 use embassy_boot_nrf::{AlignedBuffer, FirmwareState};
 use embassy_embedded_hal::flash::partition::{BlockingPartition, Partition};
+use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, select3, Either, Either3};
@@ -17,6 +18,7 @@ use embassy_nrf::interrupt::Priority;
 use embassy_nrf::peripherals::{P0_05, P0_10, P0_18, P0_25, P0_26, P0_28, TWISPI0, TWISPI1};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
+use embassy_nrf::twim::Twim;
 use embassy_nrf::{bind_interrupts, pac, peripherals, saadc, spim, twim};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BMutex;
@@ -34,7 +36,7 @@ use nrf_softdevice::{raw, Softdevice};
 use panic_probe as _;
 use pinetime_flash::XtFlash;
 use static_cell::StaticCell;
-use watchful_ui::{FirmwareDetails, MenuAction, MenuView, TimeView};
+use watchful_ui::{FirmwareDetails, MenuAction, MenuView, TimeView, WorkoutView};
 
 mod clock;
 mod display_interface;
@@ -69,7 +71,12 @@ type Display = mipidsi::Display<
 type InternalFlash = nrf_softdevice::Flash;
 type StatePartition<'a> = Partition<'a, NoopRawMutex, InternalFlash>;
 type DfuPartition<'a> = BlockingPartition<'a, NoopRawMutex, ExternalFlash>;
-type Touchpad<'a> = cst816s::CST816S<twim::Twim<'a, TWISPI1>, Input<'a, P0_28>, Output<'a, P0_10>>;
+type Touchpad<'a> =
+    cst816s::CST816S<I2cDevice<'a, NoopRawMutex, twim::Twim<'a, TWISPI1>>, Input<'a, P0_28>, Output<'a, P0_10>>;
+type Hrs<'a> = hrs3300::Hrs3300<I2cDevice<'a, NoopRawMutex, twim::Twim<'a, TWISPI1>>>;
+
+static I2C_BUS: StaticCell<BMutex<NoopRawMutex, RefCell<Twim<'static, TWISPI1>>>> = StaticCell::new();
+static SPI_BUS: StaticCell<BMutex<NoopRawMutex, RefCell<Spim<'static, TWISPI0>>>> = StaticCell::new();
 
 use core::panic::PanicInfo;
 
@@ -111,11 +118,17 @@ async fn main(s: Spawner) {
     let mut twim_config = twim::Config::default();
     twim_config.frequency = twim::Frequency::K400;
     let i2c = twim::Twim::new(p.TWISPI1, Irqs, p.P0_06, p.P0_07, twim_config);
+    let i2c_bus = I2C_BUS.init(BMutex::new(RefCell::new(i2c)));
+
+    let i2c = I2cDevice::new(i2c_bus);
+    let mut hrs = Hrs::new(i2c);
+
     // setup touchpad external interrupt pin: P0.28/AIN4 (TP_INT)
     let touch_int = Input::new(p.P0_28, Pull::Up);
     // setup touchpad reset pin: P0.10/NFC2 (TP_RESET)
     let touch_rst = Output::new(p.P0_10, Level::High, OutputDrive::Standard);
 
+    let i2c = I2cDevice::new(i2c_bus);
     let mut touchpad = cst816s::CST816S::new(i2c, touch_int, touch_rst);
     touchpad.setup(&mut embassy_time::Delay).unwrap();
 
@@ -129,7 +142,6 @@ async fn main(s: Spawner) {
     default_config.mode = MODE_3;
 
     let spim = spim::Spim::new(p.TWISPI0, Irqs, p.P0_02, p.P0_04, p.P0_03, default_config);
-    static SPI_BUS: StaticCell<BMutex<NoopRawMutex, RefCell<Spim<'static, TWISPI0>>>> = StaticCell::new();
     let spi_bus = SPI_BUS.init(BMutex::new(RefCell::new(spim)));
 
     // Create flash device
@@ -170,7 +182,7 @@ async fn main(s: Spawner) {
     let mut state = WatchState::Idle;
     loop {
         let next = state
-            .process(&mut screen, &mut btn, &mut battery, &mut fw, &mut touchpad)
+            .process(&mut screen, &mut btn, &mut battery, &mut fw, &mut touchpad, &mut hrs)
             .await;
         defmt::info!("{:?} -> {:?}", state, next);
         state = next;
@@ -266,7 +278,7 @@ impl<'a> WatchState<'a> {
             Either3::Third(selected) => match selected {
                 MenuAction::Workout => {
                     defmt::info!("Not implemented");
-                    WatchState::TimeView
+                    WatchState::WorkoutView
                 }
                 MenuAction::FindPhone => {
                     defmt::info!("Not implemented");
@@ -295,6 +307,33 @@ impl<'a> WatchState<'a> {
         }
     }
 
+    pub async fn workout(&mut self, screen: &mut Screen, button: &mut Button, hrs: &mut Hrs<'_>) -> WatchState<'a> {
+        hrs.init().unwrap();
+        hrs.enable_hrs().unwrap();
+        hrs.enable_oscillator().unwrap();
+
+        let mut seconds = 0;
+        let workout = async {
+            loop {
+                let hr = hrs.read_hrs().unwrap();
+                WorkoutView::new(hr, time::Duration::new(seconds, 0))
+                    .draw(screen.display())
+                    .unwrap();
+                screen.on();
+                Timer::after(Duration::from_secs(2)).await;
+                seconds += 2;
+            }
+        };
+
+        let next = match select(button.wait(), workout).await {
+            Either::First(_) => WatchState::MenuView(MenuView::main()),
+            Either::Second(state) => state,
+        };
+        hrs.disable_oscillator().unwrap();
+        hrs.disable_hrs().unwrap();
+        next
+    }
+
     pub async fn process(
         &mut self,
         screen: &mut Screen,
@@ -302,10 +341,12 @@ impl<'a> WatchState<'a> {
         battery: &mut Battery<'_>,
         fw: &mut FirmwareState<'_, StatePartition<'_>>,
         touchpad: &mut Touchpad<'_>,
+        hrs: &mut Hrs<'_>,
     ) -> WatchState<'a> {
         match self {
             WatchState::Idle => self.idle(screen, button).await,
             WatchState::TimeView => self.time(screen, button, battery).await,
+            WatchState::WorkoutView => self.workout(screen, button, hrs).await,
             WatchState::MenuView(mut menu) => self.menu(screen, button, battery, fw, touchpad, &mut menu).await,
         }
     }
@@ -360,7 +401,7 @@ pub enum WatchState<'a> {
     TimeView,
     MenuView(MenuView<'a>),
     //  FindPhone,
-    //  Workout,
+    WorkoutView,
 }
 
 impl<'a> defmt::Format for WatchState<'a> {
@@ -369,6 +410,7 @@ impl<'a> defmt::Format for WatchState<'a> {
             Self::Idle => defmt::write!(fmt, "Idle"),
             Self::TimeView => defmt::write!(fmt, "TimeView"),
             Self::MenuView(_) => defmt::write!(fmt, "MenuView"),
+            Self::WorkoutView => defmt::write!(fmt, "WorkoutView"),
         }
     }
 }

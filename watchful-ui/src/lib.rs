@@ -132,6 +132,60 @@ impl TimeView {
     }
 }
 
+pub struct WorkoutView {
+    hr: u32,
+    duration: time::Duration,
+}
+
+impl WorkoutView {
+    pub fn new(hr: u32, duration: time::Duration) -> Self {
+        Self { hr, duration }
+    }
+    pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
+        display.clear(Rgb::BLACK)?;
+
+        let mut buf: heapless::String<16> = heapless::String::new();
+        write!(buf, "{:03}", self.hr).unwrap();
+        let hr = Text::with_text_style(
+            &buf,
+            display.bounding_box().center(),
+            watch_text_style(Rgb::CSS_DARK_CYAN),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .baseline(embedded_graphics::text::Baseline::Alphabetic)
+                .build(),
+        );
+
+        let mut buf: heapless::String<16> = heapless::String::new();
+        write!(
+            buf,
+            "{:03}:{:02}",
+            self.duration.whole_minutes(),
+            self.duration.whole_seconds()
+        )
+        .unwrap();
+        let secs = Text::with_text_style(
+            &buf,
+            display.bounding_box().center(),
+            date_text_style(Rgb::CSS_DARK_CYAN),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .baseline(embedded_graphics::text::Baseline::Alphabetic)
+                .build(),
+        );
+
+        let display_area = display.bounding_box();
+        LinearLayout::vertical(Chain::new(hr).append(secs))
+            .with_spacing(spacing::FixedMargin(10))
+            .with_alignment(horizontal::Center)
+            .arrange()
+            .align_to(&display_area, horizontal::Center, vertical::Center)
+            .draw(display)?;
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MenuAction {

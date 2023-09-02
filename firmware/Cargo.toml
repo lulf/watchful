@@ -16,6 +16,8 @@ embassy-boot = { git = "https://github.com/embassy-rs/embassy.git", branch = "ma
 embassy-boot-nrf = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
 embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
 
+hrs3300 = { git = "https://github.com/lulf/hrs3300-rs.git", branch = "hal-1.0" }
+
 #embassy-executor = { path = "../../embassy/embassy-executor" }
 #embassy-time = {path = "../../embassy/embassy-time"}
 #embassy-sync = {path = "../../embassy/embassy-sync"}
@@ -33,6 +35,7 @@ nrf-softdevice-s132 = { git = "https://github.com/embassy-rs/nrf-softdevice.git"
 #nrf-softdevice = { path = "../../nrf-softdevice/nrf-softdevice"}
 #nrf-softdevice-mbr = { path = "../../nrf-softdevice/nrf-softdevice-mbr"}
 #nrf-softdevice-s132 = { path = "../../nrf-softdevice/nrf-softdevice-s132"}
+#
 
 [profile.release]
 debug = 2
