@@ -10,6 +10,7 @@ MEMORY
   DFU                               : ORIGIN = 0x00000000, LENGTH = 328K
 
   RAM                         (rwx) : ORIGIN = 0x20000008, LENGTH = 0xfff8
+  /* NOTE: Disable when building reloader */
   uicr_bootloader_start_address (r) : ORIGIN = 0x10001014, LENGTH = 0x4
 }
 
@@ -24,6 +25,7 @@ __bootloader_dfu_end = ORIGIN(DFU) + LENGTH(DFU);
 
 __bootloader_start = ORIGIN(FLASH);
 
+/* NOTE: Disable when building reloader */
 SECTIONS
 {
   .uicr_bootloader_start_address :
