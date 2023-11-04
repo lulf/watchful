@@ -9,15 +9,15 @@ build = "build.rs"
 embassy-futures = { version = "0.1.0" }
 futures = { version = "0.3", default-features = false, features = ["async-await"]}
 embassy-embedded-hal = { version = "0.1.0", default-features = false }
-embassy-sync = { version = "0.2.0" }
-embassy-executor = { version = "0.2.0", features = ["arch-cortex-m", "executor-thread", "nightly", "defmt", "integrated-timers", "executor-interrupt"] }
-embassy-time = { version = "0.1.0", features = ["defmt", "defmt-timestamp-uptime", "unstable-traits"] }
-embassy-nrf = { version = "0.1.0", features = ["defmt", "nrf52832", "time-driver-rtc1", "gpiote", "nightly", "unstable-pac", "time", "unstable-traits", "nfc-pins-as-gpio"] }
-embassy-boot-nrf = { version = "0.1.0", features = ["nightly"] }
-embassy-boot = { version = "0.1.0", features = ["nightly"] }
-embedded-io = "0.5.0"
-embedded-io-async = "0.5.0"
-embedded-storage = "0.3.0"
+embassy-sync = { version = "0.4.0" }
+embassy-executor = { version = "0.3.1", features = ["arch-cortex-m", "executor-thread", "nightly", "defmt", "integrated-timers", "executor-interrupt"] }
+embassy-time = { version = "0.1", features = ["defmt", "defmt-timestamp-uptime", "unstable-traits"] }
+embassy-nrf = { version = "0.1", features = ["defmt", "nrf52832", "time-driver-rtc1", "gpiote", "nightly", "unstable-pac", "time", "unstable-traits", "nfc-pins-as-gpio"] }
+embassy-boot-nrf = { version = "0.1", features = ["nightly"] }
+embassy-boot = { version = "0.1", features = ["nightly"] }
+embedded-io = "0.6"
+embedded-io-async = "0.6"
+embedded-storage = "0.3"
 embedded-hal = "1.0.0-rc.1"
 nrf-dfu-target = { version = "0.1.0", features = ["defmt"] }
 pinetime-flash = { version = "0.1.0", path = "../../pinetime-flash", features = ["defmt"] }

@@ -523,7 +523,7 @@ pub struct PineTimeServer {
 }
 
 #[nrf_softdevice::gatt_client(uuid = "1805")]
-pub struct CurrentTimeServiceClient {
+struct CurrentTimeServiceClient {
     #[characteristic(uuid = "2a2b", write, read, notify)]
     current_time: Vec<u8, 10>,
 }
