@@ -57,10 +57,11 @@ pub enum TouchGesture {
     SwipeRight(Point),
 }
 
+#[derive(PartialEq)]
 pub struct TimeView {
-    time: time::PrimitiveDateTime,
-    battery_level: u32,
-    battery_charging: bool,
+    pub time: time::PrimitiveDateTime,
+    pub battery_level: u32,
+    pub battery_charging: bool,
 }
 
 impl TimeView {
@@ -197,24 +198,24 @@ pub enum MenuAction {
     Reset,
 }
 
-#[derive(Clone, Copy)]
-pub enum MenuView<'a> {
+#[derive(Clone, Copy, PartialEq)]
+pub enum MenuView {
     Main {
-        workout: MenuItem<'a>,
-        find_phone: MenuItem<'a>,
-        settings: MenuItem<'a>,
+        workout: MenuItem,
+        find_phone: MenuItem,
+        settings: MenuItem,
     },
     Settings {
-        firmware: MenuItem<'a>,
-        reset: MenuItem<'a>,
+        firmware: MenuItem,
+        reset: MenuItem,
     },
     Firmware {
         details: FirmwareDetails,
-        item: MenuItem<'static>,
+        item: MenuItem,
     },
 }
 
-impl<'a> MenuView<'a> {
+impl MenuView {
     pub fn main() -> Self {
         Self::Main {
             workout: MenuItem::new("Workout", 0),
@@ -303,14 +304,14 @@ impl<'a> MenuView<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct MenuItem<'a> {
-    text: &'a str,
+#[derive(Clone, Copy, PartialEq)]
+pub struct MenuItem {
+    text: &'static str,
     idx: u32,
 }
 
-impl<'a> MenuItem<'a> {
-    pub fn new(text: &'a str, idx: u32) -> Self {
+impl MenuItem {
+    pub fn new(text: &'static str, idx: u32) -> Self {
         Self { text, idx }
     }
 
@@ -360,7 +361,7 @@ impl<'a> MenuItem<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct FirmwareDetails {
     name: &'static str,
     version: &'static str,
