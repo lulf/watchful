@@ -346,7 +346,6 @@ impl PineTimeServer {
     }
 }
 
-#[embassy_executor::task(pool_size = "1")]
 pub async fn gatt_server_task(conn: Connection, server: &'static PineTimeServer, dfu_config: DfuConfig<'static>) {
     let p = unsafe { pac::Peripherals::steal() };
     let part = p.FICR.info.part.read().part().bits();
@@ -449,9 +448,7 @@ pub async fn advertiser_task(
             }
         }
 
-        if let Err(e) = spawner.spawn(gatt_server_task(conn, server, dfu_config.clone())) {
-            defmt::info!("Error spawning gatt task: {:?}", e);
-        }
+        gatt_server_task(conn, server, dfu_config.clone()).await;
     }
 }
 
@@ -504,33 +501,6 @@ async fn watchdog_task() {
         Timer::after(Duration::from_secs(4)).await;
     }
 }
-
-/*
-pub enum ViewState {}
-
-pub type Signal = Signal<CriticalSectionRawMutex, Command>;
-pub enum Command {
-    Stop,
-}
-
-struct HealthTracker {}
-
-impl HealthTracker {
-    pub async fn run(&mut self) {}
-}
-
-#[embassy_executor::task]
-async fn exercise(signal: StopSignal, tracker: HealthTracker) {
-    loop {
-        match select(signal.wait(), tracker.run()).await {
-            Either::First(command) => match command {
-                Command::Stop => break,
-            },
-            Either::Second(_) => {}
-        }
-    }
-}
-*/
 
 #[derive(Clone)]
 pub struct DfuConfig<'a> {

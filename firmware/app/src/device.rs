@@ -32,6 +32,8 @@ pub struct Device<'a> {
     pub hrs: Hrs<'static>,
 }
 
+impl<'a> Device<'a> {}
+
 pub struct Button {
     pin: Input<'static, AnyPin>,
 }
