@@ -1509,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "watchful"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "byte-slice-cast 1.2.2",
  "cortex-m 0.7.7",
