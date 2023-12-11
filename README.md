@@ -28,11 +28,13 @@ To run Watchful:
 # Installing the softdevice
 probe-rs download path-to-softdevice.hex --format Hex --chip nRF52832_xxAA
 
+cd firmware
+
 # Flashing the bootloader
-cargo flash --manifest-path firmware/boot/Cargo.toml --release
+cargo flash --manifest-path boot/Cargo.toml --release
 
 # Flashing the OS
-cargo flash --manifest-path firmware/app/Cargo.toml --release
+cargo flash --manifest-path app/Cargo.toml --release
 ```
 
 ## Updating firmware
