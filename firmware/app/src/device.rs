@@ -74,7 +74,7 @@ impl<'a> Battery<'a> {
         approximate_charge(voltage)
     }
 
-    pub fn is_charging(&self) -> bool {
+    pub fn is_charging(&mut self) -> bool {
         self.charging.is_low()
     }
 }
