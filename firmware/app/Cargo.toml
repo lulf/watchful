@@ -11,15 +11,15 @@ embassy-futures = { version = "0.1" }
 futures = { version = "0.3", default-features = false, features = ["async-await"]}
 embassy-embedded-hal = { version = "0.1", default-features = false }
 embassy-sync = { version = "0.5" }
-embassy-executor = { version = "0.4", features = ["arch-cortex-m", "executor-thread", "defmt", "integrated-timers", "executor-interrupt"] }
-embassy-time = { version = "0.2", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-executor = { version = "0.5", features = ["arch-cortex-m", "executor-thread", "defmt", "integrated-timers", "executor-interrupt"] }
+embassy-time = { version = "0.3", features = ["defmt", "defmt-timestamp-uptime"] }
 embassy-nrf = { version = "0.1", features = ["defmt", "nrf52832", "time-driver-rtc1", "gpiote", "unstable-pac", "time", "nfc-pins-as-gpio"] }
-embassy-boot-nrf = { version = "0.1" }
-embassy-boot = { version = "0.1" }
+embassy-boot-nrf = { version = "0.2" }
+embassy-boot = { version = "0.2" }
 embedded-io = "0.6"
 embedded-io-async = "0.6"
 embedded-storage = "0.3"
-embedded-hal = "1.0.0-rc.3"
+embedded-hal = "1.0"
 nrf-dfu-target = { version = "0.1.0", features = ["defmt"] }
 pinetime-flash = { version = "0.1.0", path = "../../pinetime-flash", features = ["defmt"] }
 watchful-ui = { version = "0.1.0", path = "../../watchful-ui", features = ["defmt"] }
@@ -50,33 +50,10 @@ byte-slice-cast = { version = "1.2.0", default-features = false }
 vergen = { version = "8", features = ["build", "git", "gitcl"] }
 
 [patch.crates-io]
-embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
-embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
-embassy-boot = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
-embassy-boot-nrf = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
-
 hrs3300 = { git = "https://github.com/lulf/hrs3300-rs.git", branch = "hal-1.0" }
-
-#embassy-executor = { path = "../../embassy/embassy-executor" }
-#embassy-time = {path = "../../embassy/embassy-time"}
-#embassy-sync = {path = "../../embassy/embassy-sync"}
-#embassy-nrf = {path = "../../embassy/embassy-nrf"}
-#embassy-embedded-hal = {path = "../../embassy/embassy-embedded-hal"}
-#embassy-boot = {path = "../../embassy/embassy-boot/boot"}
-#embassy-boot-nrf = {path = "../../embassy/embassy-boot/nrf"}
-#embassy-futures = {path = "../../embassy/embassy-futures"}
-
 
 nrf-softdevice = { git = "https://github.com/embassy-rs/nrf-softdevice.git", branch = "master" }
 nrf-softdevice-s132 = { git = "https://github.com/embassy-rs/nrf-softdevice.git", branch = "master" }
-#
-#nrf-softdevice = { path = "../../nrf-softdevice/nrf-softdevice"}
-#nrf-softdevice-s132 = { path = "../../nrf-softdevice/nrf-softdevice-s132"}
-#
 
 [profile.release]
 debug = 2
