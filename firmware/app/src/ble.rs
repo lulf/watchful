@@ -98,9 +98,12 @@ impl NrfDfuService {
             NrfDfuServiceEvent::PacketWrite(data) => {
                 let request = DfuRequest::Write { data: &data[..] };
                 return Some(self.process(target, dfu, connection, request, |conn, response| {
-                    if conn.notify_packet {
-                        self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
+                    if conn.notify_control {
+                        self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                     }
+                    // if conn.notify_packet {
+                    //     self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
+                    // }
                     Ok(())
                 }));
             }
