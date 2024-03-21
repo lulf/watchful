@@ -1,4 +1,5 @@
 use embassy_boot_nrf::FirmwareState;
+use display_interface_spi::SPIInterface;
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_futures::select::{select, Either};
@@ -11,13 +12,12 @@ use embassy_time::{Duration, Timer};
 use mipidsi::models::ST7789;
 
 use crate::clock::Clock;
-use crate::display_interface::SPIDeviceInterface;
 
 pub type Touchpad<'a> =
     cst816s::CST816S<I2cDevice<'a, NoopRawMutex, twim::Twim<'a, TWISPI1>>, Input<'a, P0_28>, Output<'a, P0_10>>;
 pub type Hrs<'a> = hrs3300::Hrs3300<I2cDevice<'a, NoopRawMutex, twim::Twim<'a, TWISPI1>>>;
 pub type Display<'a> = mipidsi::Display<
-    SPIDeviceInterface<SpiDevice<'a, NoopRawMutex, Spim<'a, TWISPI0>, Output<'a, P0_25>>, Output<'a, P0_18>>,
+    SPIInterface<SpiDevice<'a, NoopRawMutex, Spim<'a, TWISPI0>, Output<'a, P0_25>>, Output<'a, P0_18>>,
     ST7789,
     Output<'a, P0_26>,
 >;
