@@ -502,7 +502,8 @@ checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
 [[package]]
 name = "nrf-softdevice-mbr"
 version = "0.2.0"
-source = "git+https://github.com/embassy-rs/nrf-softdevice.git?branch=master#ccba671c3f848ea7256e31549c1067e029086929"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f47431e7b1c13851c48a77211fac2b7b648b43a9a622f9c40debc76320b93217"
 
 [[package]]
 name = "nrf52805-pac"
