@@ -20,7 +20,7 @@ embedded-io = "0.6"
 embedded-io-async = "0.6"
 embedded-storage = "0.3"
 embedded-hal = "1.0"
-nrf-dfu-target = { version = "0.1.0", features = ["defmt"] }
+nrf-dfu-target = { version = "0.1.1", features = ["defmt"] }
 pinetime-flash = { version = "0.1.0", path = "../../pinetime-flash", features = ["defmt"] }
 watchful-ui = { version = "0.1.0", path = "../../watchful-ui", features = ["defmt"] }
 cst816s = "0.1.4"
