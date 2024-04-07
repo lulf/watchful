@@ -20,7 +20,7 @@ embedded-io = "0.6"
 embedded-io-async = "0.6"
 embedded-storage = "0.3"
 embedded-hal = "1.0"
-nrf-dfu-target = { version = "0.1.0", features = ["defmt"] }
+nrf-dfu-target = { version = "0.1.1", features = ["defmt"] }
 pinetime-flash = { version = "0.1.0", path = "../../pinetime-flash", features = ["defmt"] }
 watchful-ui = { version = "0.1.0", path = "../../watchful-ui", features = ["defmt"] }
 cst816s = "0.1.4"
@@ -39,10 +39,10 @@ cortex-m = { version = "0.7.6", features = ["inline-asm"] }
 cortex-m-rt = "0.7.0"
 mipidsi = { version = "0.7.1", default-features = false, features = ["heapless"] }
 heapless = "0.8"
-display-interface = "0.4.1"
-embedded-graphics = "0.8.0"
-embedded-text = "0.6.0"
-display-interface-spi = "0.4.1"
+display-interface = "0.5"
+embedded-graphics = "0.8"
+embedded-text = "0.7"
+display-interface-spi = "0.5"
 time = { version = "0.3.24", default-features = false }
 byte-slice-cast = { version = "1.2.0", default-features = false }
 
@@ -51,6 +51,7 @@ vergen = { version = "8", features = ["build", "git", "gitcl"] }
 
 [patch.crates-io]
 hrs3300 = { git = "https://github.com/lulf/hrs3300-rs.git", branch = "hal-1.0" }
+mipidsi = { git = "https://github.com/almindor/mipidsi.git", branch = "master" }
 
 nrf-softdevice = { git = "https://github.com/embassy-rs/nrf-softdevice.git", branch = "master" }
 nrf-softdevice-s132 = { git = "https://github.com/embassy-rs/nrf-softdevice.git", branch = "master" }

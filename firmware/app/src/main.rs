@@ -5,6 +5,7 @@ use core::cell::RefCell;
 
 use defmt::info;
 use defmt_rtt as _;
+use display_interface_spi::SPIInterface;
 use embassy_boot_nrf::{AlignedBuffer, FirmwareState};
 use embassy_embedded_hal::flash::partition::{BlockingPartition, Partition};
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
@@ -22,6 +23,7 @@ use embassy_sync::blocking_mutex::Mutex as BMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Duration, Timer};
 use heapless::Vec;
+use mipidsi::options::Orientation;
 use nrf_dfu_target::prelude::*;
 use nrf_softdevice::ble::{gatt_server, peripheral, Connection};
 use nrf_softdevice::{raw, Softdevice};
@@ -33,11 +35,9 @@ use static_cell::StaticCell;
 mod ble;
 mod clock;
 mod device;
-mod display_interface;
 mod state;
 use crate::clock::clock;
 use crate::device::{Battery, Button, Device, Hrs, Screen};
-use crate::display_interface::SPIDeviceInterface;
 use crate::state::WatchState;
 
 bind_interrupts!(struct Irqs {
@@ -148,14 +148,14 @@ async fn main(s: Spawner) {
     let display_cs = Output::new(p.P0_25, Level::High, OutputDrive::Standard); // Keep low while driving display
     let display_spi = SpiDevice::new(spi_bus, display_cs);
     let dc = Output::new(p.P0_18, Level::Low, OutputDrive::Standard); // Data/clock
-    let di = SPIDeviceInterface::new(display_spi, dc);
-    // create the ILI9486 display driver from the display interface and optional RST pin
-    let mut display = mipidsi::Builder::st7789(di)
-        .with_display_size(240, 240)
-        .with_invert_colors(mipidsi::ColorInversion::Inverted)
-        .init(&mut Delay, Some(rst))
+    let di = SPIInterface::new(display_spi, dc);
+    let mut display = mipidsi::Builder::new(mipidsi::models::ST7789, di)
+        .display_size(240, 240)
+        .invert_colors(mipidsi::options::ColorInversion::Inverted)
+        .reset_pin(rst)
+        .init(&mut Delay)
         .unwrap();
-    display.set_orientation(mipidsi::Orientation::Portrait(false)).unwrap();
+    display.set_orientation(Orientation::new()).unwrap();
 
     let screen = Screen::new(display, backlight);
     let mut device: Device<'_> = Device {

@@ -113,12 +113,6 @@ dependencies = [
 
 [[package]]
 name = "byte-slice-cast"
-version = "0.3.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0a5e3906bcbf133e33c1d4d95afc664ad37fbdb9f6568d8043e7ea8c27d93d3"
-
-[[package]]
-name = "byte-slice-cast"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3ac9f8b63eca6fd385229b3675f6cc0dc5c8a5c8a54a59d4f52ffd670d87b0c"
@@ -351,19 +345,20 @@ dependencies = [
 
 [[package]]
 name = "display-interface"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7517c040926d7b02b111884aa089177db80878533127f7c1b480d852c5fb4112"
+checksum = "7ba2aab1ef3793e6f7804162debb5ac5edb93b3d650fbcc5aeb72fcd0e6c03a0"
 
 [[package]]
 name = "display-interface-spi"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "489378ad054862146fbd1f09f51d585ccbe4bd1e2feadcda2a13ac33f840e1a5"
+checksum = "f86b9ec30048b1955da2038fcc3c017f419ab21bb0001879d16c0a3749dc6b7a"
 dependencies = [
- "byte-slice-cast 0.3.5",
+ "byte-slice-cast",
  "display-interface",
- "embedded-hal 0.2.7",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
 ]
 
 [[package]]
@@ -641,9 +636,9 @@ dependencies = [
 
 [[package]]
 name = "embedded-layout"
-version = "0.3.2"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b08725b7f9021377a7f84f14089b4980a30b06c5e424288b34482f17cf513369"
+checksum = "bd38d6d83acd193889e7fbdffc9d16bb82d4328d372c7c75826619a8eb8cbcda"
 dependencies = [
  "embedded-graphics",
  "embedded-layout-macros",
@@ -651,9 +646,9 @@ dependencies = [
 
 [[package]]
 name = "embedded-layout-macros"
-version = "0.2.1"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "491e0adbc526da63474799123a3140523b30fc0d14739a24e023ec5cd92e651f"
+checksum = "4f6e621fe4c7e05b695274b722dc0a60bacd1c8696b58191baa0154713d52400"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -677,9 +672,9 @@ dependencies = [
 
 [[package]]
 name = "embedded-text"
-version = "0.6.6"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d77f3ba47a72780dbbf243bba7e1004619805211e26f660f243ee163486475e"
+checksum = "1f37bb00b903818f924c57ba71ecaff99824ac480b3ba47a93de219d861403ac"
 dependencies = [
  "az",
  "embedded-graphics",
@@ -928,12 +923,11 @@ checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
 [[package]]
 name = "mipidsi"
 version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46968d0e30e7753c3503248bc48b408f9cce2bfbaa522a33e13c9aafadc4ce43"
+source = "git+https://github.com/almindor/mipidsi.git?branch=master#5eb3d7e2f885c6013b0f037a61f9573ca7610d4f"
 dependencies = [
  "display-interface",
  "embedded-graphics-core",
- "embedded-hal 0.2.7",
+ "embedded-hal 1.0.0",
  "heapless 0.7.17",
  "nb 1.1.0",
 ]
@@ -955,9 +949,9 @@ checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
 
 [[package]]
 name = "nrf-dfu-target"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8fab47624da1305126217f779a78b626618c073c3ce24eef056b641739b84b3"
+checksum = "a2af922019ee9ba64c28651ea31d983fffdbb64527ca929a90baad8b6f704f6a"
 dependencies = [
  "defmt",
  "embedded-storage",
@@ -1481,9 +1475,9 @@ checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
 
 [[package]]
 name = "u8g2-fonts"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c53bd76579dcab4b69ffe77c895b8dffa4a9b3273c0a5105afc4d3768a5064ed"
+checksum = "a68775e2131c88974e3cc1da37060559090319ea140746cc1e7e7797646415c0"
 dependencies = [
  "embedded-graphics",
  "embedded-graphics-core",
@@ -1543,7 +1537,7 @@ dependencies = [
 name = "watchful"
 version = "0.2.5"
 dependencies = [
- "byte-slice-cast 1.2.2",
+ "byte-slice-cast",
  "cortex-m 0.7.7",
  "cortex-m-rt",
  "cst816s",
@@ -1589,7 +1583,7 @@ dependencies = [
  "embedded-iconoir",
  "embedded-layout",
  "embedded-text",
- "heapless 0.7.17",
+ "heapless 0.8.0",
  "micromath",
  "time",
  "u8g2-fonts",
