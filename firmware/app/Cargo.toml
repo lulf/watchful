@@ -37,7 +37,7 @@ panic-probe = { version = "0.3", features = ["print-defmt"], optional = true }
 static_cell = "1.1"
 cortex-m = { version = "0.7.6", features = ["inline-asm"] }
 cortex-m-rt = "0.7.0"
-mipidsi = { version = "0.7.1", default-features = false, features = ["heapless"] }
+mipidsi = { version = "0.8", default-features = false, features = ["heapless"] }
 heapless = "0.8"
 display-interface = "0.5"
 embedded-graphics = "0.8"
