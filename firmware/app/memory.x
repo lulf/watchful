@@ -9,7 +9,7 @@ MEMORY
 
   DFU                               : ORIGIN = 0x00000000, LENGTH = 328K
 
-  RAM                               : ORIGIN = 0x2000BAF0, LENGTH = 17680
+  RAM                               : ORIGIN = 0x20000008, LENGTH = 32760
 }
 
 __bootloader_state_start = ORIGIN(BOOTLOADER_STATE);

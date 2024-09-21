@@ -22,7 +22,7 @@ bind_interrupts!(struct Irqs {
     SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
 });
 
-type ExternalFlash<'a, 'b> = XtFlash<SpiDevice<'a, NoopRawMutex, spim::Spim<'b, TWISPI0>, Output<'b, P0_05>>>;
+type ExternalFlash<'a, 'b> = XtFlash<SpiDevice<'a, NoopRawMutex, spim::Spim<'b, TWISPI0>, Output<'b>>>;
 
 #[entry]
 fn main() -> ! {

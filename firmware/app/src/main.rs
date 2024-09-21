@@ -25,14 +25,14 @@ use embassy_time::{Delay, Duration, Timer};
 use heapless::Vec;
 use mipidsi::options::Orientation;
 use nrf_dfu_target::prelude::*;
-use nrf_softdevice::ble::{gatt_server, peripheral, Connection};
-use nrf_softdevice::{raw, Softdevice};
+//use nrf_softdevice::ble::{gatt_server, peripheral, Connection};
+//use nrf_softdevice::{raw, Softdevice};
 #[cfg(feature = "panic-probe")]
 use panic_probe as _;
 use pinetime_flash::XtFlash;
 use static_cell::StaticCell;
 
-mod ble;
+//mod ble;
 mod clock;
 mod device;
 mod state;
