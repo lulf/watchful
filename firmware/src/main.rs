@@ -3,7 +3,7 @@
 
 use core::cell::RefCell;
 
-use defmt::{info, unwrap};
+use defmt::unwrap;
 use defmt_rtt as _;
 use display_interface_spi::SPIInterface;
 use embassy_boot_nrf::{AlignedBuffer, FirmwareState};
@@ -13,18 +13,16 @@ use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pin, Pull};
 use embassy_nrf::interrupt::Priority;
-use embassy_nrf::peripherals::{P0_05, RNG, TWISPI0, TWISPI1};
+use embassy_nrf::peripherals::{RNG, TWISPI0, TWISPI1};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::twim::Twim;
-use embassy_nrf::{bind_interrupts, pac, peripherals, rng, saadc, spim, twim};
+use embassy_nrf::{bind_interrupts, peripherals, rng, saadc, spim, twim};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Duration, Timer};
-use heapless::Vec;
 use mipidsi::options::Orientation;
-use nrf_dfu_target::prelude::*;
 use nrf_sdc::{self as sdc, mpsl};
 #[cfg(feature = "panic-probe")]
 use panic_probe as _;
@@ -189,7 +187,7 @@ async fn main(s: Spawner) {
     let fw: FirmwareState<'_, _> = FirmwareState::new(dfu_config.state(), &mut magic.0);
 
     // BLE
-    ble::start(s, sdc);
+    ble::start(s, sdc, dfu_config);
 
     // Display
     let backlight = Output::new(p.P0_22.degrade(), Level::Low, OutputDrive::Standard); // Medium backlight
@@ -226,63 +224,6 @@ async fn main(s: Spawner) {
             next.draw(&mut device).await;
         }
         state = next;
-    }
-}
-
-/*
-pub async fn gatt_server_task(conn: Connection, server: &'static ble::PineTimeServer, dfu_config: DfuConfig<'static>) {
-    let p = unsafe { pac::Peripherals::steal() };
-    let part = p.FICR.info.part.read().part().bits();
-    let variant = p.FICR.info.variant.read().variant().bits();
-
-    let hw_info = HardwareInfo {
-        part,
-        variant,
-        rom_size: 0,
-        ram_size: 0,
-        rom_page_size: 0,
-    };
-
-    let fw_info = FirmwareInfo {
-        ftype: FirmwareType::Application,
-        version: 1,
-        addr: 0,
-        len: 0,
-    };
-
-    let mut conn_handle = ble::ConnectionHandle {
-        connection: conn.clone(),
-        notify_control: false,
-        notify_packet: false,
-    };
-
-    info!("Running GATT server");
-    let mut dfu = dfu_config.dfu();
-    let mut target = DfuTarget::new(dfu.size(), fw_info, hw_info);
-    let spawner = Spawner::for_current_executor().await;
-
-    let _ = gatt_server::run(&conn, server, |e| {
-        if let Some(DfuStatus::DoneReset) = server.handle(&mut target, &mut dfu, &mut conn_handle, e) {
-            let _ = spawner.spawn(finish_dfu(dfu_config.clone()));
-        }
-    })
-    .await;
-    info!("Disconnected");
-}
-*/
-
-#[embassy_executor::task]
-pub async fn finish_dfu(config: DfuConfig<'static>) {
-    let mut magic = AlignedBuffer([0; 4]);
-    let mut state = FirmwareState::new(config.state(), &mut magic.0);
-    match state.mark_updated().await {
-        Ok(_) => {
-            info!("Firmware updated, resetting");
-            cortex_m::peripheral::SCB::sys_reset();
-        }
-        Err(e) => {
-            panic!("Error marking firmware updated: {:?}", e);
-        }
     }
 }
 

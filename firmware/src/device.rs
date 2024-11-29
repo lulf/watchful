@@ -4,7 +4,7 @@ use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_futures::select::{select, Either};
 use embassy_nrf::gpio::{Input, Output};
-use embassy_nrf::peripherals::{P0_10, P0_18, P0_25, P0_26, P0_28, TWISPI0, TWISPI1};
+use embassy_nrf::peripherals::{TWISPI0, TWISPI1};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::{saadc, twim};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;

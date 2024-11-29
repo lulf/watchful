@@ -2,10 +2,13 @@ use defmt::{info, unwrap, warn};
 use embassy_executor::Spawner;
 use embedded_storage::nor_flash::NorFlash;
 use heapless::Vec;
-use nrf_dfu_target::prelude::{DfuStatus, DfuTarget};
+use nrf_dfu_target::prelude::{DfuRequest, DfuStatus, DfuTarget, FirmwareInfo, FirmwareType, HardwareInfo};
 use static_cell::StaticCell;
+use trouble_host::attribute::Characteristic;
 use trouble_host::gatt::GattEvent;
 use trouble_host::prelude::*;
+
+use crate::DfuConfig;
 
 pub const MTU: usize = 120;
 // Aligned to 4 bytes + 3 bytes for header
@@ -48,84 +51,10 @@ pub struct NrfDfuService {
     packet: Vec<u8, ATT_MTU>,
 }
 
-/*
-pub struct ConnectionHandle {
-    pub connection: Connection,
-    pub notify_control: bool,
-    pub notify_packet: bool,
-}
-
-impl NrfDfuService {
-    fn process<DFU: NorFlash, F: FnOnce(&ConnectionHandle, &[u8]) -> Result<(), NotifyValueError>>(
-        &self,
-        target: &mut Target,
-        dfu: &mut DFU,
-        conn: &mut ConnectionHandle,
-        request: DfuRequest<'_>,
-        notify: F,
-    ) -> DfuStatus {
-        let (response, status) = target.process(request, dfu);
-        let mut buf: [u8; 32] = [0; 32];
-        match response.encode(&mut buf[..]) {
-            Ok(len) => match notify(&conn, &buf[..len]) {
-                Ok(_) => {}
-                Err(e) => {
-                    warn!("Error sending notification: {:?}", e);
-                }
-            },
-            Err(e) => {
-                warn!("Error encoding DFU response: {:?}", e);
-            }
-        }
-        status
-    }
-
-    fn handle<DFU: NorFlash>(
-        &self,
-        target: &mut Target,
-        dfu: &mut DFU,
-        connection: &mut ConnectionHandle,
-        event: NrfDfuServiceEvent,
-    ) -> Option<DfuStatus> {
-        match event {
-            NrfDfuServiceEvent::ControlWrite(data) => {
-                if let Ok((request, _)) = DfuRequest::decode(&data) {
-                    return Some(self.process(target, dfu, connection, request, |conn, response| {
-                        if conn.notify_control {
-                            // TODO self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
-                        }
-                        Ok(())
-                    }));
-                }
-            }
-            NrfDfuServiceEvent::ControlCccdWrite { notifications } => {
-                connection.notify_control = notifications;
-            }
-            NrfDfuServiceEvent::PacketWrite(data) => {
-                let request = DfuRequest::Write { data: &data[..] };
-                return Some(self.process(target, dfu, connection, request, |conn, response| {
-                    if conn.notify_control {
-                        // TODO self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
-                    }
-                    // if conn.notify_packet {
-                    //     self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
-                    // }
-                    Ok(())
-                }));
-            }
-            NrfDfuServiceEvent::PacketCccdWrite { notifications } => {
-                connection.notify_packet = notifications;
-            }
-        }
-        None
-    }
-}
-*/
-
 #[gatt_server]
 pub struct PineTimeServer {
     dfu: NrfDfuService,
-    uart: NrfUartService,
+    // uart: NrfUartService,
 }
 
 /*
@@ -179,22 +108,47 @@ impl CurrentTimeServiceClient {
 */
 
 impl PineTimeServer<'_, '_, NrfController> {
-    pub fn handle<DFU: NorFlash>(
+    pub async fn handle<DFU: NorFlash>(
         &self,
         target: &mut Target,
         dfu: &mut DFU,
-        conn: &mut Connection<'static>,
-        event: GattEvent,
+        connection: Connection<'static>,
+        handle: u16,
     ) -> Option<DfuStatus> {
-        todo!()
-        /*
-        match event {
-            PineTimeServerEvent::Dfu(event) => self.dfu.handle(target, dfu, conn, event),
-            PineTimeServerEvent::Uart(event) => {
-                self.uart.handle(conn, event);
+        if handle == self.dfu.control.handle {
+            let data = unwrap!(self.get(&self.dfu.control));
+            if let Ok((request, _)) = DfuRequest::decode(&data) {
+                let (response, status) = target.process(request, dfu);
+                let mut buf: [u8; 32] = [0; 32];
+                if let Ok(len) = response.encode(&mut buf[..]) {
+                    let response = Vec::from_slice(&buf[..len]).unwrap();
+                    if let Err(e) = self.notify(&self.dfu.control, &connection, &response).await {
+                        warn!("Error notifying control: {:?}", e);
+                    }
+                }
+                Some(status)
+            } else {
                 None
             }
-        }*/
+        } else if handle == self.dfu.packet.handle {
+            let data = unwrap!(self.get(&self.dfu.packet));
+            let request = DfuRequest::Write { data: &data[..] };
+            let (response, status) = target.process(request, dfu);
+            let mut buf: [u8; 32] = [0; 32];
+            if let Ok(len) = response.encode(&mut buf[..]) {
+                let response = Vec::from_slice(&buf[..len]).unwrap();
+                if let Err(e) = self.notify(&self.dfu.control, &connection, &response).await {
+                    warn!("Error notifying control: {:?}", e);
+                }
+
+                if let Err(e) = self.notify(&self.dfu.packet, &connection, &response).await {
+                    warn!("Error notifying packet: {:?}", e);
+                }
+            }
+            Some(status)
+        } else {
+            None
+        }
     }
 }
 
@@ -206,17 +160,15 @@ type BleResources = HostResources<NrfController, CONNECTIONS_MAX, L2CAP_CHANNELS
 static RESOURCES: StaticCell<BleResources> = StaticCell::new();
 
 fn ble_addr() -> Address {
-    unsafe {
-        let ficr = embassy_nrf::pac::FICR;
-        let high = u64::from((ficr.deviceaddr(1).read() & 0x0000ffff) | 0x0000c000);
-        let addr = high << 32 | u64::from(ficr.deviceaddr(0).read());
-        Address::random(unwrap!(addr.to_le_bytes()[..6].try_into()))
-    }
+    let ficr = embassy_nrf::pac::FICR;
+    let high = u64::from((ficr.deviceaddr(1).read() & 0x0000ffff) | 0x0000c000);
+    let addr = high << 32 | u64::from(ficr.deviceaddr(0).read());
+    Address::random(unwrap!(addr.to_le_bytes()[..6].try_into()))
 }
 
-pub fn start(spawner: Spawner, controller: NrfController) {
+pub fn start(spawner: Spawner, controller: NrfController, dfu_config: DfuConfig<'static>) {
     let resources = RESOURCES.init(BleResources::new(PacketQos::None));
-    let (stack, mut peripheral, _, runner) = trouble_host::new(controller, resources)
+    let (stack, peripheral, _, runner) = trouble_host::new(controller, resources)
         .set_random_address(ble_addr())
         .build();
 
@@ -232,7 +184,7 @@ pub fn start(spawner: Spawner, controller: NrfController) {
 
     spawner.must_spawn(ble_task(runner));
     spawner.must_spawn(gatt_task(server));
-    spawner.must_spawn(advertise_task(peripheral, server));
+    spawner.must_spawn(advertise_task(peripheral, server, dfu_config));
 }
 
 #[embassy_executor::task]
@@ -249,6 +201,7 @@ async fn gatt_task(server: &'static PineTimeServer<'_, '_, NrfController>) {
 async fn advertise_task(
     mut peripheral: Peripheral<'static, NrfController>,
     server: &'static PineTimeServer<'_, '_, NrfController>,
+    mut dfu_config: DfuConfig<'static>,
 ) {
     let mut advertiser_data = [0; 31];
     unwrap!(AdStructure::encode_slice(
@@ -272,7 +225,7 @@ async fn advertise_task(
     );
     loop {
         match advertiser.accept().await {
-            Ok(conn) => process(conn, server).await,
+            Ok(conn) => process(conn, server, &mut dfu_config).await,
             Err(e) => {
                 warn!("Error advertising: {:?}", e);
             }
@@ -280,15 +233,58 @@ async fn advertise_task(
     }
 }
 
-async fn process(connection: Connection<'static>, server: &'static PineTimeServer<'_, '_, NrfController>) {
+async fn process(
+    connection: Connection<'static>,
+    server: &'static PineTimeServer<'_, '_, NrfController>,
+    dfu_config: &mut DfuConfig<'static>,
+) {
+    let ficr = embassy_nrf::pac::FICR;
+    let part = ficr.info().part().read().part().to_bits();
+    let variant = ficr.info().variant().read().variant().to_bits();
+
+    let hw_info = HardwareInfo {
+        part,
+        variant,
+        rom_size: 0,
+        ram_size: 0,
+        rom_page_size: 0,
+    };
+
+    let fw_info = FirmwareInfo {
+        ftype: FirmwareType::Application,
+        version: 1,
+        addr: 0,
+        len: 0,
+    };
+
+    let mut dfu = dfu_config.dfu();
+    let mut target = DfuTarget::new(dfu.size(), fw_info, hw_info);
+
     loop {
         match connection.next().await {
-            ConnectionEvent::Disconnected { reason } => {
+            ConnectionEvent::Disconnected { reason: _ } => {
                 break;
             }
-            ConnectionEvent::Gatt { event, .. } => {
-                todo!()
-            }
+            ConnectionEvent::Gatt { event, connection } => match event {
+                GattEvent::Write { value_handle } => {
+                    if let Some(DfuStatus::DoneReset) =
+                        server.handle(&mut target, &mut dfu, connection, value_handle).await
+                    {
+                        let mut magic = crate::AlignedBuffer([0; 4]);
+                        let mut state = embassy_boot::FirmwareState::new(dfu_config.state(), &mut magic.0);
+                        match state.mark_updated().await {
+                            Ok(_) => {
+                                info!("Firmware updated, resetting");
+                                cortex_m::peripheral::SCB::sys_reset();
+                            }
+                            Err(e) => {
+                                panic!("Error marking firmware updated: {:?}", e);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
         }
     }
 }
