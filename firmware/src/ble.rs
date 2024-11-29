@@ -1,17 +1,20 @@
-use defmt::{info, warn};
+use defmt::{info, unwrap, warn};
+use embassy_executor::Spawner;
 use embedded_storage::nor_flash::NorFlash;
 use heapless::Vec;
-use nrf_dfu_target::prelude::*;
-use nrf_softdevice::ble::gatt_server::NotifyValueError;
-use nrf_softdevice::ble::{gatt_client, Connection};
+use nrf_dfu_target::prelude::{DfuStatus, DfuTarget};
+use static_cell::StaticCell;
+use trouble_host::gatt::GattEvent;
+use trouble_host::prelude::*;
 
 pub const MTU: usize = 120;
 // Aligned to 4 bytes + 3 bytes for header
 pub const ATT_MTU: usize = MTU + 3;
 
 type Target = DfuTarget<256>;
+type NrfController = nrf_sdc::SoftdeviceController<'static>;
 
-#[nrf_softdevice::gatt_service(uuid = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")]
+#[gatt_service(uuid = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")]
 pub struct NrfUartService {
     #[characteristic(uuid = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E", write)]
     rx: Vec<u8, ATT_MTU>,
@@ -20,6 +23,7 @@ pub struct NrfUartService {
     tx: Vec<u8, ATT_MTU>,
 }
 
+/*
 impl NrfUartService {
     fn handle(&self, _connection: &mut ConnectionHandle, event: NrfUartServiceEvent) {
         match event {
@@ -30,8 +34,9 @@ impl NrfUartService {
         }
     }
 }
+*/
 
-#[nrf_softdevice::gatt_service(uuid = "FE59")]
+#[gatt_service(uuid = "FE59")]
 pub struct NrfDfuService {
     #[characteristic(uuid = "8EC90001-F315-4F60-9FB8-838830DAEA50", write, notify)]
     control: Vec<u8, ATT_MTU>,
@@ -43,6 +48,7 @@ pub struct NrfDfuService {
     packet: Vec<u8, ATT_MTU>,
 }
 
+/*
 pub struct ConnectionHandle {
     pub connection: Connection,
     pub notify_control: bool,
@@ -86,7 +92,7 @@ impl NrfDfuService {
                 if let Ok((request, _)) = DfuRequest::decode(&data) {
                     return Some(self.process(target, dfu, connection, request, |conn, response| {
                         if conn.notify_control {
-                            self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
+                            // TODO self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                         }
                         Ok(())
                     }));
@@ -99,7 +105,7 @@ impl NrfDfuService {
                 let request = DfuRequest::Write { data: &data[..] };
                 return Some(self.process(target, dfu, connection, request, |conn, response| {
                     if conn.notify_control {
-                        self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
+                        // TODO self.control_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
                     }
                     // if conn.notify_packet {
                     //     self.packet_notify(&conn.connection, &Vec::from_slice(response).unwrap())?;
@@ -114,14 +120,16 @@ impl NrfDfuService {
         None
     }
 }
+*/
 
-#[nrf_softdevice::gatt_server]
+#[gatt_server]
 pub struct PineTimeServer {
     dfu: NrfDfuService,
     uart: NrfUartService,
 }
 
-#[nrf_softdevice::gatt_client(uuid = "1805")]
+/*
+#[gatt_client(uuid = "1805")]
 struct CurrentTimeServiceClient {
     #[characteristic(uuid = "2a2b", write, read, notify)]
     current_time: Vec<u8, 10>,
@@ -168,20 +176,118 @@ impl CurrentTimeServiceClient {
         Err(gatt_client::ReadError::Truncated)
     }
 }
+*/
 
-impl PineTimeServer {
+impl PineTimeServer<'_, '_, NrfController> {
     pub fn handle<DFU: NorFlash>(
         &self,
         target: &mut Target,
         dfu: &mut DFU,
-        conn: &mut ConnectionHandle,
-        event: PineTimeServerEvent,
+        conn: &mut Connection<'static>,
+        event: GattEvent,
     ) -> Option<DfuStatus> {
+        todo!()
+        /*
         match event {
             PineTimeServerEvent::Dfu(event) => self.dfu.handle(target, dfu, conn, event),
             PineTimeServerEvent::Uart(event) => {
                 self.uart.handle(conn, event);
                 None
+            }
+        }*/
+    }
+}
+
+/// Size of L2CAP packets (ATT MTU is this - 4)
+const L2CAP_MTU: usize = 251;
+const CONNECTIONS_MAX: usize = 2;
+const L2CAP_CHANNELS_MAX: usize = 2; // Signal + att
+type BleResources = HostResources<NrfController, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, L2CAP_MTU>;
+static RESOURCES: StaticCell<BleResources> = StaticCell::new();
+
+fn ble_addr() -> Address {
+    unsafe {
+        let ficr = embassy_nrf::pac::FICR;
+        let high = u64::from((ficr.deviceaddr(1).read() & 0x0000ffff) | 0x0000c000);
+        let addr = high << 32 | u64::from(ficr.deviceaddr(0).read());
+        Address::random(unwrap!(addr.to_le_bytes()[..6].try_into()))
+    }
+}
+
+pub fn start(spawner: Spawner, controller: NrfController) {
+    let resources = RESOURCES.init(BleResources::new(PacketQos::None));
+    let (stack, mut peripheral, _, runner) = trouble_host::new(controller, resources)
+        .set_random_address(ble_addr())
+        .build();
+
+    let gatt = unwrap!(PineTimeServer::new_with_config(
+        stack,
+        GapConfig::Peripheral(PeripheralConfig {
+            name: "Watchful",
+            appearance: &appearance::power_device::GENERIC_POWER_DEVICE,
+        }),
+    ));
+    static SERVER: StaticCell<PineTimeServer<'static, 'static, NrfController>> = StaticCell::new();
+    let server = SERVER.init(gatt);
+
+    spawner.must_spawn(ble_task(runner));
+    spawner.must_spawn(gatt_task(server));
+    spawner.must_spawn(advertise_task(peripheral, server));
+}
+
+#[embassy_executor::task]
+async fn ble_task(mut runner: Runner<'static, NrfController>) {
+    unwrap!(runner.run().await);
+}
+
+#[embassy_executor::task]
+async fn gatt_task(server: &'static PineTimeServer<'_, '_, NrfController>) {
+    unwrap!(server.run().await);
+}
+
+#[embassy_executor::task]
+async fn advertise_task(
+    mut peripheral: Peripheral<'static, NrfController>,
+    server: &'static PineTimeServer<'_, '_, NrfController>,
+) {
+    let mut advertiser_data = [0; 31];
+    unwrap!(AdStructure::encode_slice(
+        &[
+            AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
+            AdStructure::ServiceUuids16(&[Uuid::Uuid16([0x0f, 0x18])]),
+            AdStructure::CompleteLocalName(b"Watchful"),
+        ],
+        &mut advertiser_data[..],
+    ));
+    let mut advertiser = unwrap!(
+        peripheral
+            .advertise(
+                &Default::default(),
+                Advertisement::ConnectableScannableUndirected {
+                    adv_data: &advertiser_data[..],
+                    scan_data: &[],
+                },
+            )
+            .await
+    );
+    loop {
+        match advertiser.accept().await {
+            Ok(conn) => process(conn, server).await,
+            Err(e) => {
+                warn!("Error advertising: {:?}", e);
+            }
+        }
+    }
+}
+
+async fn process(connection: Connection<'static>, server: &'static PineTimeServer<'_, '_, NrfController>) {
+    loop {
+        match connection.next().await {
+            ConnectionEvent::Disconnected { reason } => {
+                break;
+            }
+            ConnectionEvent::Gatt { event, .. } => {
+                todo!()
             }
         }
     }

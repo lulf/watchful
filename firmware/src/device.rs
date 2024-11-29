@@ -1,9 +1,9 @@
-use embassy_boot_nrf::FirmwareState;
 use display_interface_spi::SPIInterface;
+use embassy_boot_nrf::FirmwareState;
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_futures::select::{select, Either};
-use embassy_nrf::gpio::{AnyPin, Input, Output};
+use embassy_nrf::gpio::{Input, Output};
 use embassy_nrf::peripherals::{P0_10, P0_18, P0_25, P0_26, P0_28, TWISPI0, TWISPI1};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::{saadc, twim};
@@ -13,13 +13,12 @@ use mipidsi::models::ST7789;
 
 use crate::clock::Clock;
 
-pub type Touchpad<'a> =
-    cst816s::CST816S<I2cDevice<'a, NoopRawMutex, twim::Twim<'a, TWISPI1>>, Input<'a, P0_28>, Output<'a, P0_10>>;
+pub type Touchpad<'a> = cst816s::CST816S<I2cDevice<'a, NoopRawMutex, twim::Twim<'a, TWISPI1>>, Input<'a>, Output<'a>>;
 pub type Hrs<'a> = hrs3300::Hrs3300<I2cDevice<'a, NoopRawMutex, twim::Twim<'a, TWISPI1>>>;
 pub type Display<'a> = mipidsi::Display<
-    SPIInterface<SpiDevice<'a, NoopRawMutex, Spim<'a, TWISPI0>, Output<'a, P0_25>>, Output<'a, P0_18>>,
+    SPIInterface<SpiDevice<'a, NoopRawMutex, Spim<'a, TWISPI0>, Output<'a>>, Output<'a>>,
     ST7789,
-    Output<'a, P0_26>,
+    Output<'a>,
 >;
 
 pub struct Device<'a> {
@@ -35,11 +34,11 @@ pub struct Device<'a> {
 impl<'a> Device<'a> {}
 
 pub struct Button {
-    pin: Input<'static, AnyPin>,
+    pin: Input<'static>,
 }
 
 impl Button {
-    pub fn new(pin: Input<'static, AnyPin>) -> Self {
+    pub fn new(pin: Input<'static>) -> Self {
         Self { pin }
     }
     pub async fn wait(&mut self) {
@@ -58,12 +57,12 @@ impl Button {
 }
 
 pub struct Battery<'a> {
-    charging: Input<'a, AnyPin>,
+    charging: Input<'a>,
     adc: saadc::Saadc<'a, 1>,
 }
 
 impl<'a> Battery<'a> {
-    pub fn new(adc: saadc::Saadc<'a, 1>, charging: Input<'a, AnyPin>) -> Self {
+    pub fn new(adc: saadc::Saadc<'a, 1>, charging: Input<'a>) -> Self {
         Self { adc, charging }
     }
     pub async fn measure(&mut self) -> u32 {
@@ -81,11 +80,11 @@ impl<'a> Battery<'a> {
 
 pub struct Screen<'a> {
     display: Display<'a>,
-    backlight: Output<'a, AnyPin>,
+    backlight: Output<'a>,
 }
 
 impl<'a> Screen<'a> {
-    pub fn new(display: Display<'a>, backlight: Output<'a, AnyPin>) -> Self {
+    pub fn new(display: Display<'a>, backlight: Output<'a>) -> Self {
         Self { display, backlight }
     }
 

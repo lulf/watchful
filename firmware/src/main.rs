@@ -3,7 +3,7 @@
 
 use core::cell::RefCell;
 
-use defmt::info;
+use defmt::{info, unwrap};
 use defmt_rtt as _;
 use display_interface_spi::SPIInterface;
 use embassy_boot_nrf::{AlignedBuffer, FirmwareState};
@@ -13,11 +13,11 @@ use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pin, Pull};
 use embassy_nrf::interrupt::Priority;
-use embassy_nrf::peripherals::{P0_05, TWISPI0, TWISPI1};
+use embassy_nrf::peripherals::{P0_05, RNG, TWISPI0, TWISPI1};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::spis::MODE_3;
 use embassy_nrf::twim::Twim;
-use embassy_nrf::{bind_interrupts, pac, peripherals, saadc, spim, twim};
+use embassy_nrf::{bind_interrupts, pac, peripherals, rng, saadc, spim, twim};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BMutex;
 use embassy_sync::mutex::Mutex;
@@ -25,14 +25,13 @@ use embassy_time::{Delay, Duration, Timer};
 use heapless::Vec;
 use mipidsi::options::Orientation;
 use nrf_dfu_target::prelude::*;
-//use nrf_softdevice::ble::{gatt_server, peripheral, Connection};
-//use nrf_softdevice::{raw, Softdevice};
+use nrf_sdc::{self as sdc, mpsl};
 #[cfg(feature = "panic-probe")]
 use panic_probe as _;
 use pinetime_flash::XtFlash;
 use static_cell::StaticCell;
 
-//mod ble;
+mod ble;
 mod clock;
 mod device;
 mod state;
@@ -41,16 +40,22 @@ use crate::device::{Battery, Button, Device, Hrs, Screen};
 use crate::state::WatchState;
 
 bind_interrupts!(struct Irqs {
-    SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0 => spim::InterruptHandler<peripherals::TWISPI0>;
-    SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1 => twim::InterruptHandler<peripherals::TWISPI1>;
+    TWISPI0 => spim::InterruptHandler<peripherals::TWISPI0>;
+    TWISPI1 => twim::InterruptHandler<peripherals::TWISPI1>;
     SAADC => saadc::InterruptHandler;
+    RNG => rng::InterruptHandler<RNG>;
+    EGU0_SWI0 => mpsl::LowPrioInterruptHandler;
+    CLOCK_POWER => mpsl::ClockInterruptHandler;
+    RADIO => mpsl::HighPrioInterruptHandler;
+    TIMER0 => mpsl::HighPrioInterruptHandler;
+    RTC0 => mpsl::HighPrioInterruptHandler;
 });
 
 static CLOCK: clock::Clock = clock::Clock::new();
 
-type ExternalFlash = XtFlash<SpiDevice<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static, P0_05>>>;
+type ExternalFlash = XtFlash<SpiDevice<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static>>>;
 
-type InternalFlash = nrf_softdevice::Flash;
+type InternalFlash = mpsl::Flash<'static>;
 type StatePartition<'a> = Partition<'a, NoopRawMutex, InternalFlash>;
 type DfuPartition<'a> = BlockingPartition<'a, NoopRawMutex, ExternalFlash>;
 
@@ -66,6 +71,24 @@ fn panic(_info: &PanicInfo) -> ! {
     cortex_m::peripheral::SCB::sys_reset();
 }
 
+#[embassy_executor::task]
+async fn mpsl_task(mpsl: &'static mpsl::MultiprotocolServiceLayer<'static>) -> ! {
+    mpsl.run().await
+}
+
+fn build_sdc<'d, const N: usize>(
+    p: sdc::Peripherals<'d>,
+    rng: &'d mut rng::Rng<RNG>,
+    mpsl: &'d mpsl::MultiprotocolServiceLayer,
+    mem: &'d mut sdc::Mem<N>,
+) -> Result<sdc::SoftdeviceController<'d>, sdc::Error> {
+    sdc::Builder::new()?
+        .support_adv()?
+        .support_peripheral()?
+        .peripheral_count(1)?
+        .build(p, rng, mpsl, mem)
+}
+
 #[embassy_executor::main]
 async fn main(s: Spawner) {
     let mut config = embassy_nrf::config::Config::default();
@@ -73,13 +96,39 @@ async fn main(s: Spawner) {
     config.time_interrupt_priority = Priority::P2;
     let p = embassy_nrf::init(config);
 
-    let sd = enable_softdevice("Watchful Embassy");
+    let mpsl_p = mpsl::Peripherals::new(p.RTC0, p.TIMER0, p.TEMP, p.PPI_CH19, p.PPI_CH30, p.PPI_CH31);
+    let lfclk_cfg = mpsl::raw::mpsl_clock_lfclk_cfg_t {
+        source: mpsl::raw::MPSL_CLOCK_LF_SRC_RC as u8,
+        rc_ctiv: mpsl::raw::MPSL_RECOMMENDED_RC_CTIV as u8,
+        rc_temp_ctiv: mpsl::raw::MPSL_RECOMMENDED_RC_TEMP_CTIV as u8,
+        accuracy_ppm: mpsl::raw::MPSL_DEFAULT_CLOCK_ACCURACY_PPM as u16,
+        skip_wait_lfclk_started: mpsl::raw::MPSL_DEFAULT_SKIP_WAIT_LFCLK_STARTED != 0,
+    };
+    static MPSL: StaticCell<mpsl::MultiprotocolServiceLayer> = StaticCell::new();
+    static SESSION_MEM: StaticCell<mpsl::SessionMem<1>> = StaticCell::new();
+    let mpsl = MPSL.init(unwrap!(mpsl::MultiprotocolServiceLayer::with_timeslots(
+        mpsl_p,
+        Irqs,
+        lfclk_cfg,
+        SESSION_MEM.init(mpsl::SessionMem::new())
+    )));
+    s.must_spawn(mpsl_task(&*mpsl));
 
-    static GATT: StaticCell<ble::PineTimeServer> = StaticCell::new();
-    let server = GATT.init(ble::PineTimeServer::new(sd).unwrap());
+    let sdc_p = sdc::Peripherals::new(
+        p.PPI_CH17, p.PPI_CH18, p.PPI_CH20, p.PPI_CH21, p.PPI_CH22, p.PPI_CH23, p.PPI_CH24, p.PPI_CH25, p.PPI_CH26,
+        p.PPI_CH27, p.PPI_CH28, p.PPI_CH29,
+    );
 
-    s.spawn(softdevice_task(sd)).unwrap();
-    s.spawn(watchdog_task()).unwrap();
+    let rng = rng::Rng::new(p.RNG, Irqs);
+
+    static SDC_MEM: StaticCell<sdc::Mem<16384>> = StaticCell::new();
+    let sdc_mem = SDC_MEM.init(sdc::Mem::new());
+
+    static RNG: StaticCell<rng::Rng<'static, RNG>> = StaticCell::new();
+    let rng = RNG.init(rng);
+
+    let sdc = unwrap!(build_sdc(sdc_p, rng, mpsl, sdc_mem));
+
     s.spawn(clock(&CLOCK)).unwrap();
 
     // Battery measurement
@@ -130,7 +179,7 @@ async fn main(s: Spawner) {
     static EXTERNAL_FLASH: StaticCell<BMutex<NoopRawMutex, RefCell<ExternalFlash>>> = StaticCell::new();
     let external_flash = EXTERNAL_FLASH.init(BMutex::new(RefCell::new(xt_flash)));
 
-    let internal_flash = nrf_softdevice::Flash::take(sd);
+    let internal_flash = mpsl::Flash::take(mpsl, p.NVMC);
     static INTERNAL_FLASH: StaticCell<Mutex<NoopRawMutex, InternalFlash>> = StaticCell::new();
     let internal_flash = INTERNAL_FLASH.init(Mutex::new(internal_flash));
 
@@ -139,10 +188,10 @@ async fn main(s: Spawner) {
     let mut magic = AlignedBuffer([0; 4]);
     let fw: FirmwareState<'_, _> = FirmwareState::new(dfu_config.state(), &mut magic.0);
 
-    // Display
-    s.spawn(advertiser_task(s, sd, server, dfu_config.clone(), "Watchful Embassy"))
-        .unwrap();
+    // BLE
+    ble::start(s, sdc);
 
+    // Display
     let backlight = Output::new(p.P0_22.degrade(), Level::Low, OutputDrive::Standard); // Medium backlight
     let rst = Output::new(p.P0_26, Level::Low, OutputDrive::Standard);
     let display_cs = Output::new(p.P0_25, Level::High, OutputDrive::Standard); // Keep low while driving display
@@ -180,6 +229,7 @@ async fn main(s: Spawner) {
     }
 }
 
+/*
 pub async fn gatt_server_task(conn: Connection, server: &'static ble::PineTimeServer, dfu_config: DfuConfig<'static>) {
     let p = unsafe { pac::Peripherals::steal() };
     let part = p.FICR.info.part.read().part().bits();
@@ -219,6 +269,7 @@ pub async fn gatt_server_task(conn: Connection, server: &'static ble::PineTimeSe
     .await;
     info!("Disconnected");
 }
+*/
 
 #[embassy_executor::task]
 pub async fn finish_dfu(config: DfuConfig<'static>) {
@@ -233,86 +284,6 @@ pub async fn finish_dfu(config: DfuConfig<'static>) {
             panic!("Error marking firmware updated: {:?}", e);
         }
     }
-}
-
-#[embassy_executor::task]
-pub async fn advertiser_task(
-    _spawner: Spawner,
-    sd: &'static Softdevice,
-    server: &'static ble::PineTimeServer,
-    dfu_config: DfuConfig<'static>,
-    name: &'static str,
-) {
-    let mut adv_data: Vec<u8, 31> = Vec::new();
-    #[rustfmt::skip]
-    adv_data.extend_from_slice(&[
-        0x02, 0x01, raw::BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE as u8,
-        0x03, 0x03, 0xFE, 0x59,
-        (1 + name.len() as u8), 0x09]).unwrap();
-
-    adv_data.extend_from_slice(name.as_bytes()).ok().unwrap();
-
-    #[rustfmt::skip]
-    let scan_data = &[
-        0x03, 0x03, 0x0A, 0x18,
-    ];
-
-    loop {
-        let config = peripheral::Config::default();
-        let adv = peripheral::ConnectableAdvertisement::ScannableUndirected {
-            adv_data: &adv_data[..],
-            scan_data,
-        };
-        info!("Advertising");
-        let conn = peripheral::advertise_connectable(sd, adv, &config).await.unwrap();
-
-        info!("Connection established");
-        Timer::after(Duration::from_secs(1)).await;
-        info!("Syncing time");
-        ble::sync_time(&conn, &CLOCK).await;
-
-        gatt_server_task(conn, server, dfu_config.clone()).await;
-    }
-}
-
-fn enable_softdevice(name: &'static str) -> &'static mut Softdevice {
-    let config = nrf_softdevice::Config {
-        clock: Some(raw::nrf_clock_lf_cfg_t {
-            source: raw::NRF_CLOCK_LF_SRC_RC as u8,
-            rc_ctiv: 4,
-            rc_temp_ctiv: 2,
-            accuracy: 7,
-        }),
-        conn_gap: Some(raw::ble_gap_conn_cfg_t {
-            conn_count: 2,
-            event_length: 24,
-        }),
-        conn_gatt: Some(raw::ble_gatt_conn_cfg_t {
-            att_mtu: crate::ble::ATT_MTU as u16,
-        }),
-        gatts_attr_tab_size: Some(raw::ble_gatts_cfg_attr_tab_size_t { attr_tab_size: 32768 }),
-        gap_role_count: Some(raw::ble_gap_cfg_role_count_t {
-            adv_set_count: 1,
-            periph_role_count: 3,
-            central_role_count: 1,
-            central_sec_count: 1,
-            _bitfield_1: Default::default(),
-        }),
-        gap_device_name: Some(raw::ble_gap_cfg_device_name_t {
-            p_value: name.as_ptr() as *const u8 as _,
-            current_len: name.len() as u16,
-            max_len: name.len() as u16,
-            write_perm: unsafe { core::mem::zeroed() },
-            _bitfield_1: raw::ble_gap_cfg_device_name_t::new_bitfield_1(raw::BLE_GATTS_VLOC_STACK as u8),
-        }),
-        ..Default::default()
-    };
-    Softdevice::enable(&config)
-}
-
-#[embassy_executor::task]
-async fn softdevice_task(sd: &'static Softdevice) {
-    sd.run().await;
 }
 
 // Keeps our system alive
