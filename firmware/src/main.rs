@@ -110,6 +110,7 @@ async fn main(s: Spawner) {
         SESSION_MEM.init(mpsl::SessionMem::new())
     )));
     s.must_spawn(mpsl_task(&*mpsl));
+    s.must_spawn(watchdog_task());
 
     let sdc_p = sdc::Peripherals::new(
         p.PPI_CH17, p.PPI_CH18, p.PPI_CH20, p.PPI_CH21, p.PPI_CH22, p.PPI_CH23, p.PPI_CH24, p.PPI_CH25, p.PPI_CH26,
@@ -126,7 +127,7 @@ async fn main(s: Spawner) {
 
     let sdc = unwrap!(build_sdc(sdc_p, rng, mpsl, sdc_mem));
 
-    s.spawn(clock(&CLOCK)).unwrap();
+    s.must_spawn(clock(&CLOCK));
 
     // Battery measurement
     let mut bat_config = saadc::ChannelConfig::single_ended(p.P0_31);
@@ -220,6 +221,16 @@ async fn main(s: Spawner) {
             next.draw(&mut device).await;
         }
         state = next;
+    }
+}
+
+// Keeps our system alive
+#[embassy_executor::task]
+async fn watchdog_task() {
+    let mut handle = unsafe { embassy_nrf::wdt::WatchdogHandle::steal(0) };
+    loop {
+        handle.pet();
+        Timer::after(Duration::from_secs(4)).await;
     }
 }
 
