@@ -6,7 +6,6 @@ use core::cell::RefCell;
 use defmt::unwrap;
 use defmt_rtt as _;
 use display_interface_spi::SPIInterface;
-use embassy_boot_nrf::{AlignedBuffer, FirmwareState};
 use embassy_embedded_hal::flash::partition::{BlockingPartition, Partition};
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
@@ -183,8 +182,6 @@ async fn main(s: Spawner) {
 
     // DFU setup
     let dfu_config = DfuConfig::new(internal_flash, external_flash);
-    let mut magic = AlignedBuffer([0; 4]);
-    let fw: FirmwareState<'_, _> = FirmwareState::new(dfu_config.state(), &mut magic.0);
 
     // BLE
     ble::start(s, sdc, dfu_config);
@@ -210,7 +207,6 @@ async fn main(s: Spawner) {
         screen,
         button: btn,
         battery,
-        firmware: fw,
         touchpad,
         hrs,
     };
@@ -252,21 +248,14 @@ impl<'a> DfuConfig<'a> {
         internal: &'a Mutex<NoopRawMutex, InternalFlash>,
         external: &'a BMutex<NoopRawMutex, RefCell<ExternalFlash>>,
     ) -> Self {
-        extern "C" {
-            static __bootloader_state_start: u32;
-            static __bootloader_state_end: u32;
-            static __bootloader_dfu_start: u32;
-            static __bootloader_dfu_end: u32;
-        }
-
         unsafe {
-            let dfu_start = &__bootloader_dfu_start as *const u32 as u32;
-            let dfu_end = &__bootloader_dfu_end as *const u32 as u32;
+            let dfu_start = u32::MAX;
+            let dfu_end = u32::MAX;
 
             BlockingPartition::new(external, dfu_start, dfu_end - dfu_start);
 
-            let state_start = &__bootloader_state_start as *const u32 as u32;
-            let state_end = &__bootloader_state_end as *const u32 as u32;
+            let state_start = u32::MAX;
+            let state_end = u32::MAX;
 
             Partition::new(internal, state_start, state_end - state_start);
             Self {

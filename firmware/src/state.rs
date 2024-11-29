@@ -1,5 +1,4 @@
 use defmt::info;
-use embassy_boot::State as FwState;
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_time::{Duration, Instant, Timer};
 use embedded_graphics::prelude::*;
@@ -216,18 +215,23 @@ impl MenuState {
                     cortex_m::peripheral::SCB::sys_reset();
                 }
                 MenuAction::FirmwareSettings => {
+                    /*
                     let validated = FwState::Boot
                         == device
                             .firmware
                             .get_state()
                             .await
                             .expect("Failed to read firmware state");
+                    */
+                    let validated = false;
                     WatchState::Menu(MenuState::new(MenuView::firmware_settings(
                         firmware_details(&mut device.battery, validated).await,
                     )))
                 }
                 MenuAction::ValidateFirmware => {
                     info!("Validate firmware");
+                    WatchState::Time(TimeState::new(device, Timeout::new(IDLE_TIMEOUT)).await)
+                    /*
                     let validated = FwState::Boot
                         == device
                             .firmware
@@ -246,7 +250,7 @@ impl MenuState {
                         WatchState::Menu(MenuState::new(MenuView::firmware_settings(
                             firmware_details(&mut device.battery, validated).await,
                         )))
-                    }
+                    }*/
                 }
             },
         }

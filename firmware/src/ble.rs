@@ -270,17 +270,18 @@ async fn process(
                     if let Some(DfuStatus::DoneReset) =
                         server.handle(&mut target, &mut dfu, connection, value_handle).await
                     {
-                        let mut magic = crate::AlignedBuffer([0; 4]);
-                        let mut state = embassy_boot::FirmwareState::new(dfu_config.state(), &mut magic.0);
-                        match state.mark_updated().await {
-                            Ok(_) => {
-                                info!("Firmware updated, resetting");
-                                cortex_m::peripheral::SCB::sys_reset();
-                            }
-                            Err(e) => {
-                                panic!("Error marking firmware updated: {:?}", e);
-                            }
-                        }
+                        warn!("Supposed to reset!");
+                        //let mut magic = crate::AlignedBuffer([0; 4]);
+                        //let mut state = embassy_boot::FirmwareState::new(dfu_config.state(), &mut magic.0);
+                        //match state.mark_updated().await {
+                        //    Ok(_) => {
+                        //        info!("Firmware updated, resetting");
+                        //        cortex_m::peripheral::SCB::sys_reset();
+                        //    }
+                        //    Err(e) => {
+                        //        panic!("Error marking firmware updated: {:?}", e);
+                        //    }
+                        //}
                     }
                 }
                 _ => {}

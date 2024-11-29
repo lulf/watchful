@@ -1,5 +1,4 @@
 use display_interface_spi::SPIInterface;
-use embassy_boot_nrf::FirmwareState;
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_futures::select::{select, Either};
@@ -26,7 +25,6 @@ pub struct Device<'a> {
     pub screen: Screen<'static>,
     pub button: Button,
     pub battery: Battery<'static>,
-    pub firmware: FirmwareState<'a, crate::StatePartition<'static>>,
     pub touchpad: Touchpad<'static>,
     pub hrs: Hrs<'static>,
 }

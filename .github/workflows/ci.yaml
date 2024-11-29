@@ -34,6 +34,7 @@ jobs:
       - name: Install prerequisites
         run: |
           pip3 install adafruit-nrfutil
+          pip3 install -r tools/mcuboot/requirements.txt
           cargo install cargo-binutils
 
       - name: Build release artifacts
@@ -41,8 +42,8 @@ jobs:
           cd firmware
           cargo build --release
           cargo objcopy --release -- -O binary watchful.bin
-          cargo objcopy --release -- -O ihex watchful.hex
-          adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application watchful.bin watchful-dfu.zip
+          ../tools/mcuboot/imgtool.py create --align 4 --version 1.0.0 --header-size 32 --slot-size 475136 --pad-header watchful.bin watchful-image.bin
+          adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application watchful-image.bin watchful-dfu.zip
 
       - name: Upload binary
         uses: actions/upload-artifact@v3
@@ -55,6 +56,12 @@ jobs:
         with:
           name: watchful.hex
           path: firmware/app/watchful.hex
+
+      - name: Upload Mcuboot image
+        uses: actions/upload-artifact@v3
+        with:
+          name: watchful-image.bin
+          path: firmware/app/watchful-image.bin
 
       - name: Upload DFU bundle
         uses: actions/upload-artifact@v3
