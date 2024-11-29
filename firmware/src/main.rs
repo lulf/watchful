@@ -223,16 +223,6 @@ async fn main(s: Spawner) {
     }
 }
 
-// Keeps our system alive
-#[embassy_executor::task]
-async fn watchdog_task() {
-    let mut handle = unsafe { embassy_nrf::wdt::WatchdogHandle::steal(0) };
-    loop {
-        handle.pet();
-        Timer::after(Duration::from_secs(4)).await;
-    }
-}
-
 #[derive(Clone)]
 pub struct DfuConfig<'a> {
     internal: &'a Mutex<NoopRawMutex, InternalFlash>,
