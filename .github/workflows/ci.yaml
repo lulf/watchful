@@ -49,22 +49,22 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: watchful.bin
-          path: firmware/app/watchful.bin
+          path: firmware/watchful.bin
 
       - name: Upload HEX
         uses: actions/upload-artifact@v3
         with:
           name: watchful.hex
-          path: firmware/app/watchful.hex
+          path: firmware/watchful.hex
 
       - name: Upload Mcuboot image
         uses: actions/upload-artifact@v3
         with:
           name: watchful-image.bin
-          path: firmware/app/watchful-image.bin
+          path: firmware/watchful-image.bin
 
       - name: Upload DFU bundle
         uses: actions/upload-artifact@v3
         with:
           name: watchful-dfu.zip
-          path: firmware/app/watchful-dfu.zip
+          path: firmware/watchful-dfu.zip
