@@ -10,7 +10,6 @@ rustflags = [
 #  "-Z", "features=host_dep",
   # Code-size optimizations.
   "-Z", "trap-unreachable=no",
-  "-C", "inline-threshold=5", # try different values here
   "-C", "no-vectorize-loops", # try with and without this
 ]
 
