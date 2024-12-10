@@ -37,7 +37,7 @@ mod clock;
 mod device;
 mod state;
 use crate::clock::clock;
-use crate::device::{Battery, Button, Device, Hrs, Screen};
+use crate::device::{Battery, Button, Device, Hrs, Screen, Vibrator};
 use crate::state::WatchState;
 
 bind_interrupts!(struct Irqs {
@@ -65,6 +65,18 @@ use core::panic::PanicInfo;
 fn panic(_info: &PanicInfo) -> ! {
     cortex_m::peripheral::SCB::sys_reset();
 }
+/*
+static CHANNEL: Channel<ThreadModeRawMutex, bool, 0> = Channel::new();
+
+#[embassy_executor::task]
+async fn timer_task() {
+    loop {
+        CHANNEL.send(LedState::On).await;
+        Timer::after_secs(1).await;
+        CHANNEL.send(LedState::Off).await;
+        Timer::after_secs(1).await;
+    }
+}*/
 
 #[embassy_executor::main]
 async fn main(s: Spawner) {
@@ -81,7 +93,7 @@ async fn main(s: Spawner) {
     s.spawn(softdevice_task(sd)).unwrap();
     s.spawn(watchdog_task()).unwrap();
     s.spawn(clock(&CLOCK)).unwrap();
-
+	
     // Battery measurement
     let mut bat_config = saadc::ChannelConfig::single_ended(p.P0_31);
     bat_config.gain = saadc::Gain::GAIN1_4;
@@ -139,6 +151,10 @@ async fn main(s: Spawner) {
     let mut magic = AlignedBuffer([0; 4]);
     let fw: FirmwareState<'_, _> = FirmwareState::new(dfu_config.state(), &mut magic.0);
 
+	// Vibration
+	let motor = Output::new(p.P0_16, Level::High, OutputDrive::Standard0Disconnect1);
+	let vibrator = Vibrator::new(motor);
+	
     // Display
     s.spawn(advertiser_task(s, sd, server, dfu_config.clone(), "Watchful Embassy"))
         .unwrap();
@@ -156,7 +172,7 @@ async fn main(s: Spawner) {
         .init(&mut Delay)
         .unwrap();
     display.set_orientation(Orientation::new()).unwrap();
-
+	
     let screen = Screen::new(display, backlight);
     let mut device: Device<'_> = Device {
         clock: &CLOCK,
@@ -166,8 +182,9 @@ async fn main(s: Spawner) {
         firmware: fw,
         touchpad,
         hrs,
+        vibrator,
     };
-
+	
     let mut state = WatchState::default();
     state.draw(&mut device).await;
     loop {
