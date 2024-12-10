@@ -2,8 +2,10 @@ use defmt::info;
 use embassy_boot::State as FwState;
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_time::{Duration, Instant, Timer};
+use embassy_time::Ticker;
+//use embedded_graphics::{framebuffer,prelude::*};
 use embedded_graphics::prelude::*;
-use watchful_ui::{FirmwareDetails, MenuAction, MenuView, TimeView, WorkoutView};
+use watchful_ui::{FirmwareDetails, MenuAction, MenuView, TimeView, WorkoutView, TimerView};
 
 use crate::device::Device;
 
@@ -43,6 +45,7 @@ pub enum WatchState {
     Menu(MenuState),
     //  FindPhone,
     Workout(WorkoutState),
+    Timer(TimerState),
 }
 
 impl Default for WatchState {
@@ -58,6 +61,7 @@ impl defmt::Format for WatchState {
             Self::Time(_) => defmt::write!(fmt, "Time"),
             Self::Menu(_) => defmt::write!(fmt, "Menu"),
             Self::Workout(_) => defmt::write!(fmt, "Workout"),
+            Self::Timer(_) => defmt::write!(fmt, "Timer"),
         }
     }
 }
@@ -69,6 +73,7 @@ impl WatchState {
             WatchState::Time(state) => state.draw(device).await,
             WatchState::Menu(state) => state.draw(device).await,
             WatchState::Workout(state) => state.draw(device).await,
+            WatchState::Timer(state) => state.draw(device).await,
         }
     }
 
@@ -78,6 +83,7 @@ impl WatchState {
             WatchState::Time(state) => state.next(device).await,
             WatchState::Menu(state) => state.next(device).await,
             WatchState::Workout(state) => state.next(device).await,
+            WatchState::Timer(state) => state.next(device).await,
         }
     }
 }
@@ -122,9 +128,11 @@ impl TimeState {
     }
 
     pub async fn next(&mut self, device: &mut Device<'_>) -> WatchState {
+    	let mut ticker = Ticker::every(Duration::from_secs(2));
         loop {
             match select3(
-                Timer::after(Duration::from_secs(2)),
+                //Timer::after(Duration::from_secs(2)),
+                ticker.next(),
                 self.timeout.timer(),
                 device.button.wait(),
             )
@@ -198,11 +206,38 @@ impl MenuState {
                     WatchState::Menu(MenuState::new(MenuView::main()))
                 } else if let MenuView::Firmware { .. } = &self.view {
                     WatchState::Menu(MenuState::new(MenuView::settings()))
+                } else if let MenuView::Timer { .. } = &self.view {
+                    WatchState::Menu(MenuState::new(MenuView::timers()))                    
+                } else if let MenuView::Timers { .. } = &self.view {
+                    WatchState::Menu(MenuState::new(MenuView::timers()))
                 } else {
                     WatchState::Time(TimeState::new(device, Timeout::new(IDLE_TIMEOUT)).await)
                 }
             }
             Either3::Third(selected) => match selected {
+            	MenuAction::Timers => WatchState::Menu(MenuState::new(MenuView::timers())),
+				MenuAction::TimerOne => {
+                    //WatchState::Timer(TimerState { duration: 180, running: false })
+                    WatchState::Menu(MenuState::new(MenuView::timer_view(
+                    		TimerView::new(time::Duration::seconds(180), false))))
+                }
+				MenuAction::TimerTwo => {
+                    WatchState::Menu(MenuState::new(MenuView::timer_view(
+                    		TimerView::new(time::Duration::seconds(120), false))))
+                }
+				MenuAction::TimerThree => {
+                    WatchState::Menu(MenuState::new(MenuView::timer_view(
+                    		TimerView::new(time::Duration::seconds(60), false))))
+                }
+				MenuAction::TimerFour => {
+                    WatchState::Menu(MenuState::new(MenuView::timer_view(
+                    		TimerView::new(time::Duration::seconds(30), false))))
+                }
+				MenuAction::ToggleTimer(rem, run) => {
+                    WatchState::Timer(TimerState { duration: rem, running: run })
+                    //WatchState::Menu(MenuState::new(MenuView::timer_view(
+                    	//TimerView::new(time::Duration::seconds(rem), run))))
+                }                               
                 MenuAction::Workout => {
                     defmt::info!("Not implemented");
                     WatchState::Workout(WorkoutState {})
@@ -254,6 +289,100 @@ impl MenuState {
 }
 
 #[derive(PartialEq)]
+pub struct TimerState {
+	duration: i64,
+	running: bool
+}
+
+impl TimerState {
+	//i added embedded_graphics_framebuf
+	//and did my graphics write calls to that, then that gets
+    pub async fn draw(&mut self, _device: &mut Device<'_>) {}/*
+	pub fn on_event(&self, input: InputEvent) {
+ 		match self {
+			if tog.is_clicked(input) {
+      			self.running = !self.ruinning;
+	       } else {
+				None
+			}
+		}
+	}    */
+    pub async fn next(&mut self, device: &mut Device<'_>) -> WatchState {
+        let screen = &mut device.screen;
+        let button = &mut device.button;
+    	let mut ticker = Ticker::every(Duration::from_secs(1));
+		let mut tv = TimerView::new(time::Duration::seconds(self.duration), self.running);
+  		let v = &mut device.vibrator;
+
+		
+        let timer = async {
+            loop {
+            	tv.remaining = time::Duration::seconds(self.duration);
+            	tv.draw(screen.display()).unwrap();
+            	screen.on();
+                if tv.running {
+                	self.duration -= 1;
+				}
+					
+                if self.duration <= 1 {
+                    break;
+                }
+                ticker.next().await;
+                self.running = tv.running;
+            }
+            
+            tv.remaining = time::Duration::ZERO;
+            	tv.draw(screen.display()).unwrap();
+            	screen.on();
+            	v.on_for(1500).await;
+            //loop {}
+        };
+    	
+      	/*
+        let timer = async {
+            loop {
+                TimerView::new(time::Duration::seconds(secs))
+                    .draw(screen.display())
+                    .unwrap();
+                screen.on();
+                secs -= 1;
+
+                if secs <= 0 {
+                    break;
+                }
+                ticker.next().await;
+            }
+        };
+      	
+      	let mut secs = 60.0;
+      	let mut ticker = Ticker::every(Duration::from_millis(100));
+        let timer = async {
+            loop {
+                TimerView::new(time::Duration::checked_seconds_f32(secs)
+                	.expect("wrong seconds"))
+                    .draw(screen.display())
+                    .unwrap();
+                screen.on();
+                secs -= 0.1;
+
+                if secs <= 0.0 {
+                    break;
+                }
+                ticker.next().await;
+            }
+        };
+        */
+        
+        let next = match select(button.wait(), timer).await {
+            Either::First(_) => WatchState::Menu(MenuState::new(MenuView::main())),
+            // this state is not triggered
+            Either::Second(_) => WatchState::Menu(MenuState::new(MenuView::timers())),
+        };
+        next
+    }
+}
+
+#[derive(PartialEq)]
 pub struct WorkoutState {}
 
 impl WorkoutState {
@@ -262,6 +391,7 @@ impl WorkoutState {
         let screen = &mut device.screen;
         let button = &mut device.button;
         let hrs = &mut device.hrs;
+        let mut ticker = Ticker::every(Duration::from_secs(2));
         hrs.init().unwrap();
         hrs.enable_hrs().unwrap();
         hrs.enable_oscillator().unwrap();
@@ -274,7 +404,7 @@ impl WorkoutState {
                     .draw(screen.display())
                     .unwrap();
                 screen.on();
-                Timer::after(Duration::from_secs(2)).await;
+                ticker.next().await;
                 seconds += 2;
             }
         };
