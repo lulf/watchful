@@ -16,7 +16,7 @@ use u8g2_fonts::{fonts, U8g2TextStyle};
 
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 240;
-const GRID_ITEMS: u32 = 3;
+const GRID_ITEMS: u32 = 4;
 
 fn watch_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
     //U8g2TextStyle::new(fonts::u8g2_font_unifont_t_symbols, Rgb::YELLOW)
@@ -35,6 +35,10 @@ fn date_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
 
 fn text_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
     U8g2TextStyle::new(fonts::u8g2_font_unifont_t_symbols, color)
+}
+
+fn perc_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
+    U8g2TextStyle::new(fonts::u8g2_font_spleen12x24_mf, color)
 }
 
 pub enum ButtonEvent {
@@ -80,7 +84,7 @@ impl TimeView {
         let hm = Text::with_text_style(
             &buf,
             display.bounding_box().center(),
-            watch_text_style(Rgb::CSS_DARK_CYAN),
+            watch_text_style(Rgb::CSS_LIME),
             TextStyleBuilder::new()
                 .alignment(embedded_graphics::text::Alignment::Center)
                 .baseline(embedded_graphics::text::Baseline::Alphabetic)
@@ -94,7 +98,7 @@ impl TimeView {
         let date = Text::with_text_style(
             &buf,
             display.bounding_box().center(),
-            date_text_style(Rgb::CSS_DARK_CYAN),
+            date_text_style(Rgb::CSS_LIME),
             TextStyleBuilder::new()
                 .alignment(embedded_graphics::text::Alignment::Center)
                 .baseline(embedded_graphics::text::Baseline::Alphabetic)
@@ -109,35 +113,152 @@ impl TimeView {
             .align_to(&display_area, horizontal::Center, vertical::Center)
             .draw(display)?;
 
-        let display_area = display_area.offset(-5);
-        let top_right_y = display_area.top_left.y;
-        let top_right_x = display_area.top_left.x + display_area.size.width as i32 - 30;
+		let display_area = display_area.offset(-5);
+        let top_right_y = display_area.top_left.y + 20;
+        let top_right_x = display_area.top_left.x + display_area.size.width as i32 - 22;
         let pos = Point::new(top_right_x, top_right_y);
+        let color;
+        
         if self.battery_charging {
-            Image::new(&icons::size24px::system::BatteryCharging::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
+        	color = Rgb::CSS_DEEP_SKY_BLUE;
+            Image::new(&icons::size24px::system::BatteryCharging::new(color), pos).draw(display)?
         } else {
             if self.battery_level > 85 {
-                Image::new(&icons::size24px::system::BatteryFull::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
+            	color = Rgb::CSS_DARK_GREEN;
+                Image::new(&icons::size24px::system::BatteryFull::new(color), pos).draw(display)?
             } else if self.battery_level > 65 {
-                Image::new(&icons::size24px::system::BatterySevenFive::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
+            	color = Rgb::CSS_GREEN;
+                Image::new(&icons::size24px::system::BatterySevenFive::new(color), pos).draw(display)?
             } else if self.battery_level > 35 {
-                Image::new(&icons::size24px::system::BatteryFiveZero::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
+            	color = Rgb::CSS_YELLOW;
+                Image::new(&icons::size24px::system::BatteryFiveZero::new(color), pos).draw(display)?
             } else if self.battery_level > 10 {
-                Image::new(&icons::size24px::system::BatteryTwoFive::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
+            	color = Rgb::CSS_DARK_ORANGE;
+                Image::new(&icons::size24px::system::BatteryTwoFive::new(color), pos).draw(display)?
             } else {
-                Image::new(&icons::size24px::system::BatteryEmpty::new(Rgb::CSS_DARK_CYAN), pos).draw(display)?
+            	color = Rgb::CSS_RED;
+                Image::new(&icons::size24px::system::BatteryEmpty::new(color), pos).draw(display)?
             }
         };
-
+        
+		let mut buf: heapless::String<16> = heapless::String::new();
+		write!(buf, "{:02}%", self.battery_level).unwrap();
+        let perc = Text::with_text_style(
+            &buf,
+            display.bounding_box().center(),
+            perc_text_style(color),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Right)
+                .baseline(embedded_graphics::text::Baseline::Alphabetic)
+                .build(),
+        );
+        
+        let display_area = display.bounding_box();
+        LinearLayout::horizontal(Chain::new(perc))
+            .with_spacing(spacing::FixedMargin(10))
+            .with_alignment(vertical::Center)
+            .arrange()
+            .align_to(&display_area, horizontal::Right, vertical::Top)
+            .draw(display)?;
+           
         Ok(())
     }
+}
+
+#[derive(PartialEq, Copy, Clone)]
+pub struct TimerView {
+    pub remaining: time::Duration,
+    pub running: bool,
+}
+
+impl TimerView {
+    pub fn new(remaining: time::Duration, running: bool) -> Self {
+        Self { remaining, running }
+    }
+    pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
+        display.clear(Rgb::BLACK)?;
+        //let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT);
+        
+        let mut buf: heapless::String<16> = heapless::String::new();
+        write!(
+            buf,
+            //"{:02}:{:02}:{02}",
+            "{:02}:{:02}",
+            self.remaining.whole_minutes(),
+            self.remaining.whole_seconds() % 60,
+            //self.remaining.subsec_milliseconds() / 100
+        )
+        .unwrap();
+
+		let cd = Text::with_text_style(
+            &buf,
+            display.bounding_box().center(),
+            watch_text_style(Rgb::CSS_LIME),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .baseline(embedded_graphics::text::Baseline::Alphabetic)
+                .build(),
+        );
+
+        let display_area = display.bounding_box();
+        LinearLayout::vertical(Chain::new(cd))
+            .with_spacing(spacing::FixedMargin(10))
+            .with_alignment(horizontal::Center)
+            .arrange()
+            .align_to(&display_area, horizontal::Center, vertical::Center)
+            .draw(display)?;
+/*
+		//Draw button
+		let line_style = PrimitiveStyleBuilder::new()
+            .stroke_color(Rgb::CSS_LIME)
+            .stroke_width(1)
+            .fill_color(Rgb::CSS_BLACK)
+            .build();
+        let (start, end) = self.placement();
+        Rectangle::with_corners(start, end)
+            .into_styled(line_style)
+            .draw(display)?;
+
+        Text::with_text_style(
+            "Play/Pause",
+            Point::new(WIDTH as i32 / 2, HEIGHT as i32 - 25),
+            menu_text_style(Rgb::CSS_LIME),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .build(),
+        )
+        .draw(display)?;*/
+      	//let tog = TimerControl::new(if self.running { "Pause" } else { "Play" }, 1);
+        Ok(())
+    }
+/*
+	fn placement(&self) -> (Point, Point) {
+        //let start = Point::new(10, (4 * HEIGHT / GRID_ITEMS + 10) as i32);
+        let start = Point::new(2, HEIGHT as i32 - 60);
+        let end = Point::new(
+            start.x + (WIDTH as i32 / 2) - 4,
+            HEIGHT as i32 - 2,
+            //start.y + HEIGHT as i32,
+        );
+        (start, end)
+    }
+
+    // Check if point is within our range
+    pub fn is_clicked(&self, event: InputEvent) -> bool {
+        if let InputEvent::Touch(TouchGesture::SingleTap(pos)) = event {
+            let (c1, c2) = self.placement();
+            c1.x <= pos.x && c1.y <= pos.y && c2.x >= pos.x && c2.y >= pos.y
+        } else {
+            false
+        }
+    }*/
 }
 
 pub struct WorkoutView {
     hr: u32,
     duration: time::Duration,
 }
-
+   
 impl WorkoutView {
     pub fn new(hr: u32, duration: time::Duration) -> Self {
         Self { hr, duration }
@@ -182,7 +303,6 @@ impl WorkoutView {
             .arrange()
             .align_to(&display_area, horizontal::Center, vertical::Center)
             .draw(display)?;
-
         Ok(())
     }
 }
@@ -190,6 +310,12 @@ impl WorkoutView {
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MenuAction {
+	ToggleTimer(i64, bool),
+	TimerOne,
+	TimerTwo,
+	TimerThree,
+	TimerFour,
+	Timers,
     Workout,
     FindPhone,
     Settings,
@@ -201,9 +327,20 @@ pub enum MenuAction {
 #[derive(Clone, Copy, PartialEq)]
 pub enum MenuView {
     Main {
+        timers: MenuItem,
         workout: MenuItem,
         find_phone: MenuItem,
         settings: MenuItem,
+    },
+    Timers {
+		one: MenuItem,
+     	two: MenuItem,
+     	three: MenuItem,
+		four: MenuItem,
+    },
+    Timer {
+    	timer: TimerView,
+    	toggle: TimerControl,
     },
     Settings {
         firmware: MenuItem,
@@ -218,12 +355,32 @@ pub enum MenuView {
 impl MenuView {
     pub fn main() -> Self {
         Self::Main {
-            workout: MenuItem::new("Workout", 0),
-            find_phone: MenuItem::new("Find Phone", 1),
-            settings: MenuItem::new("Settings", 2),
+            timers: MenuItem::new("Timers", 0),
+            workout: MenuItem::new("Workout", 1),
+            find_phone: MenuItem::new("Find Phone", 2),
+            settings: MenuItem::new("Settings", 3),
         }
     }
 
+    pub fn timers() -> Self {
+        Self::Timers {
+			one: MenuItem::new("3 minutes", 0),
+	     	two: MenuItem::new("2 minutes", 1),
+	     	three: MenuItem::new("1 minute", 2),
+			four: MenuItem::new("30 seconds", 3),
+        }
+    }
+
+	pub fn timer_view(timer: TimerView) -> Self {
+		let rem = timer.remaining;
+		let run = timer.running;
+        Self::Timer {
+        	timer: TimerView { remaining: rem, running: run },
+			toggle: TimerControl::new("Start", 1),
+			//toggle: TimerControl::new(if run { "Pause" } else { "Play" }, 1),
+        }
+    }
+    
     pub fn settings() -> Self {
         Self::Settings {
             firmware: MenuItem::new("Firmware", 0),
@@ -244,15 +401,17 @@ impl MenuView {
 
         match self {
             Self::Main {
+                timers,
                 workout,
                 find_phone,
                 settings,
             } => {
+                timers.draw(display)?;
                 workout.draw(display)?;
                 find_phone.draw(display)?;
                 settings.draw(display)?;
             }
-
+            
             Self::Settings { firmware, reset } => {
                 firmware.draw(display)?;
                 reset.draw(display)?;
@@ -262,6 +421,18 @@ impl MenuView {
                 details.draw(display)?;
                 item.draw(display)?;
             }
+
+            Self::Timer { timer, toggle } => {
+				timer.draw(display)?;
+                toggle.draw(display)?;
+            }
+            
+            Self::Timers { one, two, three, four } => {
+				one.draw(display)?;
+                two.draw(display)?;
+                three.draw(display)?;
+                four.draw(display)?;
+            }
         }
 
         Ok(())
@@ -270,11 +441,14 @@ impl MenuView {
     pub fn on_event(&self, input: InputEvent) -> Option<MenuAction> {
         match self {
             Self::Main {
+                timers,
                 workout,
                 find_phone,
                 settings,
             } => {
-                if workout.is_clicked(input) {
+        		if timers.is_clicked(input) {
+        			Some(MenuAction::Timers)
+                } else if workout.is_clicked(input) {
                     Some(MenuAction::Workout)
                 } else if find_phone.is_clicked(input) {
                     Some(MenuAction::FindPhone)
@@ -300,6 +474,91 @@ impl MenuView {
                     None
                 }
             }
+			Self::Timer { timer, toggle } => {
+                if toggle.is_clicked(input) {
+                	let rem = timer.remaining.whole_seconds();
+                	let run = !timer.running;
+                    Some(MenuAction::ToggleTimer(rem, run))
+                } else {
+                    None
+                }
+            }
+            Self::Timers { one, two, three, four } => {
+                if one.is_clicked(input) {
+                    Some(MenuAction::TimerOne)
+                } else if two.is_clicked(input) {
+                    Some(MenuAction::TimerTwo)
+                } else if three.is_clicked(input) {
+                    Some(MenuAction::TimerThree)
+                } else if four.is_clicked(input) {
+                    Some(MenuAction::TimerFour)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+
+#[derive(Clone, Copy, PartialEq)]
+pub struct TimerControl {
+    text: &'static str,
+    idx: u32,
+}
+
+impl TimerControl {
+    pub fn new(text: &'static str, idx: u32) -> Self {
+        Self { text, idx }
+    }
+    
+    pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
+		let line_style = PrimitiveStyleBuilder::new()
+            .stroke_color(Rgb::CSS_LIME)
+            .stroke_width(1)
+            .fill_color(Rgb::CSS_BLACK)
+            .build();
+        let (start, end) = self.placement();
+        Rectangle::with_corners(start, end)
+            .into_styled(line_style)
+            .draw(display)?;
+
+        Text::with_text_style(
+            self.text,
+            Point::new(WIDTH as i32 / 2, HEIGHT as i32 - 25),
+            //Point::new(WIDTH as i32 / 4 * self.idx as i32, HEIGHT as i32 - 25),
+            /*
+            Point::new(
+            	WIDTH as i32 / 4 * self.idx as i32,
+            	HEIGHT as i32 - 25),*/
+            menu_text_style(Rgb::CSS_LIME),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .build(),
+        )
+        .draw(display)?;
+        Ok(())
+    }
+	
+    fn placement(&self) -> (Point, Point) {
+        //let start = Point::new(10, (4 * HEIGHT / GRID_ITEMS + 10) as i32);
+        let start = Point::new(2, HEIGHT as i32 - 60);
+        let end = Point::new(
+            //start.x + (WIDTH as i32 / 2) - 4,
+            start.x + WIDTH as i32 - 4,
+            HEIGHT as i32 - 2,
+            //start.y + HEIGHT as i32,
+        );
+        (start, end)
+    }
+
+    // Check if point is within our range
+    pub fn is_clicked(&self, event: InputEvent) -> bool {
+        if let InputEvent::Touch(TouchGesture::SingleTap(pos)) = event {
+            let (c1, c2) = self.placement();
+            c1.x <= pos.x && c1.y <= pos.y && c2.x >= pos.x && c2.y >= pos.y
+        } else {
+            false
         }
     }
 }
@@ -317,9 +576,9 @@ impl MenuItem {
 
     pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
         let line_style = PrimitiveStyleBuilder::new()
-            .stroke_color(Rgb::CSS_DARK_CYAN)
+            .stroke_color(Rgb::CSS_LIME)
             .stroke_width(1)
-            .fill_color(Rgb::CSS_DARK_CYAN)
+            .fill_color(Rgb::CSS_BLACK)
             .build();
         let (start, end) = self.placement();
         Rectangle::with_corners(start, end)
@@ -330,9 +589,9 @@ impl MenuItem {
             self.text,
             Point::new(
                 (WIDTH as i32) / 2,
-                self.idx as i32 * (HEIGHT as i32 / GRID_ITEMS as i32) + 47,
+                self.idx as i32 * (HEIGHT as i32 / GRID_ITEMS as i32) + 40,
             ),
-            menu_text_style(Rgb::CSS_CORNSILK),
+            menu_text_style(Rgb::CSS_LIME),
             TextStyleBuilder::new()
                 .alignment(embedded_graphics::text::Alignment::Center)
                 .build(),
