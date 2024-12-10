@@ -4,7 +4,7 @@ use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_futures::select::{select, Either};
 use embassy_nrf::gpio::{AnyPin, Input, Output};
-use embassy_nrf::peripherals::{P0_10, P0_18, P0_25, P0_26, P0_28, TWISPI0, TWISPI1};
+use embassy_nrf::peripherals::{P0_10, P0_16, P0_18, P0_25, P0_26, P0_28, TWISPI0, TWISPI1};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::{saadc, twim};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -30,9 +30,41 @@ pub struct Device<'a> {
     pub firmware: FirmwareState<'a, crate::StatePartition<'static>>,
     pub touchpad: Touchpad<'static>,
     pub hrs: Hrs<'static>,
+    pub vibrator: Vibrator<'static>,
+    //pub wtimer: Wtimer,
 }
 
 impl<'a> Device<'a> {}
+/*
+pub struct Wtimer {
+	pub running: bool,
+}
+
+impl Wtimer {
+    pub fn new(running: bool) -> Self {
+        Self { running }
+    }
+}
+*/
+pub struct Vibrator<'a> {
+    motor: Output<'a, P0_16>,
+}
+
+impl<'a> Vibrator<'a> {
+    pub fn new(motor: Output<'a, P0_16>) -> Self {
+        Self { motor }
+    }
+
+    pub async fn on_for(&mut self, ms: u64) {
+        self.motor.set_low();
+        Timer::after(Duration::from_millis(ms)).await;
+        self.motor.set_high();
+    }
+
+    pub fn off(&mut self) {
+        self.motor.set_high();
+    }
+}
 
 pub struct Button {
     pin: Input<'static, AnyPin>,
