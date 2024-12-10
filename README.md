@@ -26,15 +26,15 @@ To run Watchful:
 
 ``` 4d
 # Installing the softdevice
-probe-rs download path-to-softdevice.hex --format Hex --chip nRF52832_xxAA
+probe-rs download path-to-softdevice.hex --binary-format Hex --chip nRF52832_xxAA
 
 # Flashing the bootloader
 cd firmware/boot
-cargo flash --release
+cargo flash --release --chip nRF52832_xxAA
 
 # Flashing the OS
 cd ../app
-cargo flash --release
+cargo flash --release --chip nRF52832_xxAA
 ```
 
 ## Updating firmware
