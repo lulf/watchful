@@ -63,7 +63,6 @@ struct CurrentTimeServiceClient {
     #[characteristic(uuid = "2a2b", write, read, notify)]
     current_time: Vec<u8, 10>,
 }
-
 pub async fn sync_time(conn: &Connection, clock: &crate::clock::Clock) {
     if let Ok(time_client) = gatt_client::discover::<CurrentTimeServiceClient>(&conn).await {
         info!("Found time server on peer, synchronizing time");
@@ -184,7 +183,7 @@ pub fn start(spawner: Spawner, controller: NrfController, dfu_config: DfuConfig<
 
     spawner.must_spawn(ble_task(runner));
     spawner.must_spawn(gatt_task(server));
-    spawner.must_spawn(advertise_task(peripheral, server, dfu_config));
+    spawner.must_spawn(advertise_task(stack, peripheral, server, dfu_config));
 }
 
 #[embassy_executor::task]
@@ -199,6 +198,7 @@ async fn gatt_task(server: &'static PineTimeServer<'_, '_, NrfController>) {
 
 #[embassy_executor::task]
 async fn advertise_task(
+    stack: Stack<'static, NrfController>,
     mut peripheral: Peripheral<'static, NrfController>,
     server: &'static PineTimeServer<'_, '_, NrfController>,
     mut dfu_config: DfuConfig<'static>,
@@ -225,7 +225,7 @@ async fn advertise_task(
     );
     loop {
         match advertiser.accept().await {
-            Ok(conn) => process(conn, server, &mut dfu_config).await,
+            Ok(conn) => process(stack, conn, server, &mut dfu_config).await,
             Err(e) => {
                 warn!("Error advertising: {:?}", e);
             }
@@ -234,6 +234,7 @@ async fn advertise_task(
 }
 
 async fn process(
+    stack: Stack<'static, NrfController>,
     connection: Connection<'static>,
     server: &'static PineTimeServer<'_, '_, NrfController>,
     dfu_config: &mut DfuConfig<'static>,
@@ -257,8 +258,12 @@ async fn process(
         len: 0,
     };
 
-    let mut dfu = dfu_config.dfu();
-    let mut target = DfuTarget::new(dfu.size(), fw_info, hw_info);
+    // Synchronize time
+    let s = Spawner::for_current_executor().await;
+    s.must_spawn(sync_time(stack, connection.clone()));
+
+    //let mut dfu = dfu_config.dfu();
+    //let mut target = DfuTarget::new(dfu.size(), fw_info, hw_info);
 
     loop {
         match connection.next().await {
@@ -267,6 +272,8 @@ async fn process(
             }
             ConnectionEvent::Gatt { event, connection } => match event {
                 GattEvent::Write { value_handle } => {
+                    defmt::info!("Gatt write!");
+                    /*
                     if let Some(DfuStatus::DoneReset) =
                         server.handle(&mut target, &mut dfu, connection, value_handle).await
                     {
@@ -282,10 +289,53 @@ async fn process(
                         //        panic!("Error marking firmware updated: {:?}", e);
                         //    }
                         //}
-                    }
+                    }*/
                 }
                 _ => {}
             },
         }
     }
+}
+
+#[embassy_executor::task]
+async fn sync_time(stack: Stack<'static, NrfController>, conn: Connection<'static>) {
+    info!("Synchronizing time, creating gatt client");
+    let client = unwrap!(GattClient::<_, 10, 24>::new(stack, &conn).await);
+
+    info!("Discovering time service");
+    let services = unwrap!(client.services_by_uuid(&Uuid::new_short(0x1805)).await);
+    let service = services.first().unwrap().clone();
+
+    info!("Looking for value handle");
+    let c: Characteristic<u8> = unwrap!(client.characteristic_by_uuid(&service, &Uuid::new_short(0x2a2b)).await);
+
+    info!("Reading characteristic");
+    let mut data = [0; 10];
+    unwrap!(client.read_characteristic(&c, &mut data[..]).await);
+
+    if let Some(time) = parse_time(data) {
+        crate::CLOCK.set(time);
+    }
+}
+
+fn parse_time(data: [u8; 10]) -> Option<time::PrimitiveDateTime> {
+    let year = u16::from_le_bytes([data[0], data[1]]);
+    let month = data[2];
+    let day = data[3];
+    let hour = data[4];
+    let minute = data[5];
+    let second = data[6];
+    let _weekday = data[7];
+    let secs_frac = data[8];
+
+    if let Ok(month) = month.try_into() {
+        let date = time::Date::from_calendar_date(year as i32, month, day);
+        let micros = secs_frac as u32 * 1000000 / 256;
+        let time = time::Time::from_hms_micro(hour, minute, second, micros);
+        if let (Ok(time), Ok(date)) = (time, date) {
+            let dt = time::PrimitiveDateTime::new(date, time);
+            return Some(dt);
+        }
+    }
+    None
 }

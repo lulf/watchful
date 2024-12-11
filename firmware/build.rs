@@ -19,7 +19,14 @@ fn linker_data() -> &'static [u8] {
     #[cfg(feature = "baremetal")]
     return include_bytes!("memory-bm.x");
     #[cfg(not(feature = "baremetal"))]
-    return include_bytes!("memory.x");
+    return include_bytes!("memory-img.x");
+}
+
+fn linker_file() -> &'static str {
+    #[cfg(feature = "baremetal")]
+    return "memory-bm.x";
+    #[cfg(not(feature = "baremetal"))]
+    return "memory-img.x";
 }
 
 fn main() {
@@ -37,7 +44,7 @@ fn main() {
     // any file in the project changes. By specifying `memory.x`
     // here, we ensure the build script is only re-run when
     // `memory.x` is changed.
-    println!("cargo:rerun-if-changed=memory.x");
+    println!("cargo:rerun-if-changed={}", linker_file());
 
     println!("cargo:rustc-link-arg-bins=--nmagic");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");

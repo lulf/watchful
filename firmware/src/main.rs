@@ -185,7 +185,7 @@ async fn main(s: Spawner) {
     let dfu_config = DfuConfig::new(internal_flash, external_flash);
 
     // BLE
-    // ble::start(s, sdc, dfu_config);
+    ble::start(s, sdc, dfu_config);
 
     // Display
 

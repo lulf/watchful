@@ -13,10 +13,13 @@ Firmware for Pinetime based on [Embassy](https://embassy.dev). The goal is to pr
 ## Features 
 
 * Basic UI with menus using [`embedded-graphics`](https://crates.io/crates/embedded-graphics).
-* Implements Nordic DFU protocol so you can update from a phone app such as nRF Connect to perform firmware updates.
 * Automatically synchronizes time with using BLE standard Current Time Service.
 * Rollback to previous firmware if reset or crashing before new firmware is validated in watch UI.
 * Compatible with existing InfiniTime bootloader.
+
+Some features that has been removed after recent switch to mcuboot, but will be added again soon:
+
+* Implements Nordic DFU protocol so you can update from a phone app such as nRF Connect to perform firmware updates.
 
 ## Getting started
 
