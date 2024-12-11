@@ -11,9 +11,9 @@ embassy-futures = { version = "0.1" }
 futures = { version = "0.3", default-features = false, features = ["async-await"]}
 embassy-embedded-hal = { version = "0.2", default-features = false }
 embassy-sync = { version = "0.6" }
-embassy-executor = { version = "0.6", features = ["arch-cortex-m", "executor-thread", "executor-interrupt", "defmt", "integrated-timers"] }
-embassy-time = { version = "0.3", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
-embassy-nrf = { version = "0.2", features = ["defmt", "nrf52832", "time-driver-rtc1", "gpiote", "unstable-pac", "time", "nfc-pins-as-gpio"] }
+embassy-executor = { version = "0.6", features = ["arch-cortex-m", "executor-thread", "defmt", "integrated-timers", "task-arena-size-8192"] }
+embassy-time = { version = "0.3", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-nrf = { version = "0.2", features = ["defmt", "nrf52832", "time-driver-rtc1", "rt", "gpiote", "unstable-pac", "time", "nfc-pins-as-gpio"] }
 embedded-io = "0.6"
 embedded-io-async = "0.6"
 embedded-storage = "0.3"
@@ -45,6 +45,9 @@ embedded-text = "0.7"
 display-interface-spi = "0.5"
 time = { version = "0.3.24", default-features = false }
 byte-slice-cast = { version = "1.2.0", default-features = false }
+
+[features]
+baremetal = []
 
 [build-dependencies]
 vergen = { version = "8", features = ["build", "git", "gitcl"] }

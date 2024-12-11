@@ -3,6 +3,7 @@
 
 use cortex_m_rt::{entry, exception};
 use embassy_nrf as _;
+use embassy_nrf::gpio::{Level, Output, OutputDrive};
 
 #[entry]
 fn main() -> ! {
@@ -11,7 +12,6 @@ fn main() -> ! {
             static __reloader_start: u32;
         }
         let start = &__reloader_start as *const u32 as u32;
-
         let mut p = cortex_m::Peripherals::steal();
         p.SCB.invalidate_icache();
         p.SCB.vtor.write(start);

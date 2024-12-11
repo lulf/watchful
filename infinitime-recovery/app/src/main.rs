@@ -4,10 +4,11 @@
 #![feature(impl_trait_in_assoc_type)]
 
 use embassy_executor::{InterruptExecutor, Spawner};
+use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_nrf::interrupt;
 use embassy_nrf::interrupt::{InterruptExt, Priority};
 use embassy_nrf::nvmc::Nvmc;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 
 #[interrupt]
 unsafe fn SWI0_EGU0() {
@@ -23,8 +24,9 @@ static EXECUTOR_MED: InterruptExecutor = InterruptExecutor::new();
 struct AlignedBuffer([u8; 4096]);
 
 #[embassy_executor::main]
-async fn main(_s: Spawner) {
+async fn main(_spawner: Spawner) {
     let p = embassy_nrf::init(Default::default());
+    let mut led = Output::new(p.P0_17, Level::Low, OutputDrive::Standard);
 
     // Medium-priority executor: SWI0_EGU0, priority level 7
     interrupt::SWI0_EGU0.set_priority(Priority::P6);
@@ -35,15 +37,21 @@ async fn main(_s: Spawner) {
 
     let mut buf = AlignedBuffer([0; 4096]);
     let mut internal_flash = Nvmc::new(p.NVMC);
-    watchful_infinitime_recovery::recover(
-        &mut internal_flash,
-        &mut embassy_time::Delay,
-        &mut buf.0,
-        MCUBOOT,
-        RECOVERY,
-    )
-    .await;
-    Timer::after(Duration::from_secs(5)).await;
+    //    watchful_infinitime_recovery::recover(
+    //        &mut internal_flash,
+    //        &mut embassy_time::Delay,
+    //        &mut buf.0,
+    //        MCUBOOT,
+    //        RECOVERY,
+    //    )
+    //    .await;
+    let timeout = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < timeout {
+        led.set_low();
+        Timer::after(Duration::from_millis(400)).await;
+        led.set_high();
+        Timer::after(Duration::from_millis(400)).await;
+    }
     cortex_m::peripheral::SCB::sys_reset();
 }
 

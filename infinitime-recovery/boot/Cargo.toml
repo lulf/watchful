@@ -1,6 +1,6 @@
 [package]
 edition = "2021"
-name = "reloader-bootloader"
+name = "recovery-boot"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
 resolver = "2"

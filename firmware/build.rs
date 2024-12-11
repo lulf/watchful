@@ -15,13 +15,20 @@ use std::path::PathBuf;
 
 use vergen::EmitBuilder;
 
+fn linker_data() -> &'static [u8] {
+    #[cfg(feature = "baremetal")]
+    return include_bytes!("memory-bm.x");
+    #[cfg(not(feature = "baremetal"))]
+    return include_bytes!("memory.x");
+}
+
 fn main() {
     // Put `memory.x` in our output directory and ensure it's
     // on the linker search path.
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
     File::create(out.join("memory.x"))
         .unwrap()
-        .write_all(include_bytes!("memory.x"))
+        .write_all(linker_data())
         .unwrap();
 
     println!("cargo:rustc-link-search={}", out.display());

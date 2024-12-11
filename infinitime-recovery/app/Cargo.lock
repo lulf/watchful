@@ -726,6 +726,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 
 [[package]]
+name = "recovery-app"
+version = "0.1.0"
+dependencies = [
+ "cortex-m",
+ "cortex-m-rt",
+ "embassy-embedded-hal",
+ "embassy-executor",
+ "embassy-futures",
+ "embassy-nrf",
+ "embassy-sync",
+ "embassy-time",
+ "embedded-hal 1.0.0",
+ "embedded-io",
+ "embedded-storage",
+ "futures",
+ "heapless 0.7.17",
+ "static_cell",
+ "watchful-infinitime-recovery",
+]
+
+[[package]]
 name = "rustc_version"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -852,25 +873,4 @@ dependencies = [
  "embedded-hal-async",
  "embedded-io",
  "embedded-storage",
-]
-
-[[package]]
-name = "watchful-infinitime-recovery-app"
-version = "0.1.0"
-dependencies = [
- "cortex-m",
- "cortex-m-rt",
- "embassy-embedded-hal",
- "embassy-executor",
- "embassy-futures",
- "embassy-nrf",
- "embassy-sync",
- "embassy-time",
- "embedded-hal 1.0.0",
- "embedded-io",
- "embedded-storage",
- "futures",
- "heapless 0.7.17",
- "static_cell",
- "watchful-infinitime-recovery",
 ]

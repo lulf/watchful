@@ -119,7 +119,7 @@ async fn main(s: Spawner) {
 
     let rng = rng::Rng::new(p.RNG, Irqs);
 
-    static SDC_MEM: StaticCell<sdc::Mem<16384>> = StaticCell::new();
+    static SDC_MEM: StaticCell<sdc::Mem<1448>> = StaticCell::new();
     let sdc_mem = SDC_MEM.init(sdc::Mem::new());
 
     static RNG: StaticCell<rng::Rng<'static, RNG>> = StaticCell::new();
@@ -185,10 +185,11 @@ async fn main(s: Spawner) {
     let dfu_config = DfuConfig::new(internal_flash, external_flash);
 
     // BLE
-    ble::start(s, sdc, dfu_config);
+    // ble::start(s, sdc, dfu_config);
 
     // Display
-    let backlight = Output::new(p.P0_22.degrade(), Level::Low, OutputDrive::Standard); // Medium backlight
+
+    let mut backlight = Output::new(p.P0_22.degrade(), Level::Low, OutputDrive::Standard); // Medium backlight
     let rst = Output::new(p.P0_26, Level::Low, OutputDrive::Standard);
     let display_cs = Output::new(p.P0_25, Level::High, OutputDrive::Standard); // Keep low while driving display
     let display_spi = SpiDevice::new(spi_bus, display_cs);
@@ -201,6 +202,8 @@ async fn main(s: Spawner) {
         .init(&mut Delay)
         .unwrap();
     display.set_orientation(Orientation::new()).unwrap();
+
+    backlight.set_high();
 
     let screen = Screen::new(display, backlight);
     let mut device: Device<'_> = Device {
@@ -253,12 +256,12 @@ impl<'a> DfuConfig<'a> {
             let dfu_start = u32::MAX;
             let dfu_end = u32::MAX;
 
-            BlockingPartition::new(external, dfu_start, dfu_end - dfu_start);
+            //BlockingPartition::new(external, dfu_start, dfu_end - dfu_start);
 
             let state_start = u32::MAX;
             let state_end = u32::MAX;
 
-            Partition::new(internal, state_start, state_end - state_start);
+            //Partition::new(internal, state_start, state_end - state_start);
             Self {
                 internal,
                 external,

@@ -12,34 +12,32 @@ Firmware for Pinetime based on [Embassy](https://embassy.dev). The goal is to pr
 
 ## Features 
 
-* Implements Nordic DFU protocol so you can update from a phone app such as nRF Connect.
+* Basic UI with menus using [`embedded-graphics`](https://crates.io/crates/embedded-graphics).
+* Implements Nordic DFU protocol so you can update from a phone app such as nRF Connect to perform firmware updates.
 * Automatically synchronizes time with using BLE standard Current Time Service.
-* Use external flash (4MB) for firmware updates and persistence.
 * Rollback to previous firmware if reset or crashing before new firmware is validated in watch UI.
-* Can be installed from Infinitime using DFU.
+* Compatible with existing InfiniTime bootloader.
 
 ## Getting started
 
-The recommended way to run Watchful is to get a [PineTime Development Kit](https://pine64.com/product/pinetime-dev-kit/), to which you can connect a debug probe. To run Watchful, you need to download the latest [S132 SoftDevice](https://www.nordicsemi.com/Products/Development-software/s132/download). For flashing and running with the debug probe, `probe-rs` is recommended.
+If you have InfiniTime running already, it's easy to try out Watchful. You can use the same app you use to update InfiniTime to try out Watchful (such as GadgetBridge). 
+
+Pick the `watchful-dfu.zip` from the [latest release](https://github.com/lulf/watchful/releases) and upload it to your watch. To revert back to InfiniTime, head into the menu -> settings -> reset, and mcuboot will do the rest.
+
+## Developing
+
+The recommended way to develop Watchful is to get a [PineTime Development Kit](https://pine64.com/product/pinetime-dev-kit/), to which you can connect a debug probe. For flashing and running with the debug probe, `probe-rs` is recommended.
 
 To run Watchful:
 
 ``` 4d
-# Installing the softdevice
-probe-rs download path-to-softdevice.hex --format Hex --chip nRF52832_xxAA
-
-# Flashing the bootloader
-cd firmware/boot
-cargo flash --release
-
-# Flashing the OS
-cd ../app
-cargo flash --release
+cd firmware
+cargo run --release --features panic-probe,baremetal
 ```
 
 ## Updating firmware
 
-Once you have Watchful running, you can use an app such as nRF Connect on Android or iOS using the DFU functionality with the [latest release](https://github.com/lulf/watchful/releases).
+Once you have Watchful running, you can use an app such as GadgetBridge nRF Connect on Android or iOS using the DFU functionality with the [latest release](https://github.com/lulf/watchful/releases).
 
 ## *DANGER* Reflashing your sealed PineTime from InfiniTime to Watchful
 

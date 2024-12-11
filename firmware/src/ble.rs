@@ -153,8 +153,8 @@ impl PineTimeServer<'_, '_, NrfController> {
 }
 
 /// Size of L2CAP packets (ATT MTU is this - 4)
-const L2CAP_MTU: usize = 251;
-const CONNECTIONS_MAX: usize = 2;
+const L2CAP_MTU: usize = 27;
+const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 2; // Signal + att
 type BleResources = HostResources<NrfController, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, L2CAP_MTU>;
 static RESOURCES: StaticCell<BleResources> = StaticCell::new();
