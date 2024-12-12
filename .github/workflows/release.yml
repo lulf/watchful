@@ -23,7 +23,7 @@ jobs:
 
   release:
     # Only run if the checks pass
-    name: Publish to crates.io
+    name: Publish
     needs: check
     runs-on: ubuntu-24.04
     timeout-minutes: 10
