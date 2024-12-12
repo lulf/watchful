@@ -44,3 +44,14 @@ cargo run --release --features panic-probe,baremetal
 NOTE: If you've used watchful before, it now has switched from using `embassy-boot` to `mcuboot` as provided by default on InfiniTime. To achieve that, the [nrf-softdevice](https://github.com/embassy-rs/nrf-softdevice/) has been replaced with [trouble](https://github.com/embassy-rs/trouble). 
 
 The `infinitime-recovery` app allows you to move from previous versions of Watchful to the new.
+
+## License
+
+Code in `tools/mcuboot` are subject to mcuboot licensing.
+
+Watchful is licensed under either of
+
+* Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+* MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option.
