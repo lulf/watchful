@@ -26,7 +26,7 @@ struct AlignedBuffer([u8; 4096]);
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let p = embassy_nrf::init(Default::default());
-    let mut led = Output::new(p.P0_17, Level::Low, OutputDrive::Standard);
+    let mut led = Output::new(p.P0_22, Level::Low, OutputDrive::Standard);
 
     // Medium-priority executor: SWI0_EGU0, priority level 7
     interrupt::SWI0_EGU0.set_priority(Priority::P6);
@@ -37,21 +37,23 @@ async fn main(_spawner: Spawner) {
 
     let mut buf = AlignedBuffer([0; 4096]);
     let mut internal_flash = Nvmc::new(p.NVMC);
-    //    watchful_infinitime_recovery::recover(
-    //        &mut internal_flash,
-    //        &mut embassy_time::Delay,
-    //        &mut buf.0,
-    //        MCUBOOT,
-    //        RECOVERY,
-    //    )
-    //    .await;
-    let timeout = Instant::now() + Duration::from_secs(60);
+    watchful_infinitime_recovery::recover(
+        &mut internal_flash,
+        &mut embassy_time::Delay,
+        &mut buf.0,
+        MCUBOOT,
+        RECOVERY,
+    )
+    .await;
+
+    let timeout = Instant::now() + Duration::from_secs(10);
     while Instant::now() < timeout {
         led.set_low();
         Timer::after(Duration::from_millis(400)).await;
         led.set_high();
         Timer::after(Duration::from_millis(400)).await;
     }
+
     cortex_m::peripheral::SCB::sys_reset();
 }
 
