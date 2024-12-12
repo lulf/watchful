@@ -51,12 +51,11 @@ jobs:
     - name: Build release artifacts
       run: |
         cd firmware
+        TAG_VERSION=${GITHUB_REF#refs/tags/v}
         cargo build --release
         cargo objcopy --release -- -O binary watchful.bin
         ../tools/mcuboot/imgtool.py create --align 4 --version 1.0.0 --header-size 32 --slot-size 475136 --pad-header watchful.bin watchful-image.bin
-        adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application watchful-image.bin watchful-dfu.zip
-        TAG_VERSION=${GITHUB_REF#refs/tags/v}
-        mv watchful-dfu.zip ../watchful-dfu-${TAG_VERSION}.zip
+        adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application watchful-image.bin watchful-dfu-${TAG_VERSION}.zip
 
     - name: Create GitHub release
       env:
@@ -68,4 +67,4 @@ jobs:
             --repo="$GITHUB_REPOSITORY" \
             --title="${GITHUB_REPOSITORY#*/} ${tag#v}" \
             --generate-notes
-            watchful-dfu-${TAG_VERSION}.zip
+            ./firmware/watchful-dfu-${TAG_VERSION}.zip
