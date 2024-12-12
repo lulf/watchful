@@ -17,9 +17,10 @@ Firmware for Pinetime based on [Embassy](https://embassy.dev). The goal is to pr
 * Rollback to previous firmware if reset or crashing before new firmware is validated in watch UI.
 * Compatible with existing InfiniTime bootloader.
 
-Some features that has been removed after recent switch to mcuboot, but will be added again soon:
+NOTE: Some features that has been removed after recent switch to mcuboot, but will be added again soon:
 
-* Implements Nordic DFU protocol so you can update from a phone app such as nRF Connect to perform firmware updates.
+* DFU: Implements Nordic DFU protocol so you can update from a phone app such as nRF Connect to perform firmware updates.
+
 
 ## Getting started
 
@@ -38,18 +39,8 @@ cd firmware
 cargo run --release --features panic-probe,baremetal
 ```
 
-## Updating firmware
+## Recovering from older versions of Watchful
 
-Once you have Watchful running, you can use an app such as GadgetBridge nRF Connect on Android or iOS using the DFU functionality with the [latest release](https://github.com/lulf/watchful/releases).
+NOTE: If you've used watchful before, it now has switched from using `embassy-boot` to `mcuboot` as provided by default on InfiniTime. To achieve that, the [nrf-softdevice](https://github.com/embassy-rs/nrf-softdevice/) has been replaced with [trouble](https://github.com/embassy-rs/trouble). 
 
-## *DANGER* Reflashing your sealed PineTime from InfiniTime to Watchful
-
-If you want to reflash your sealed PineTime to Watchful, it is possible. But there is a chance to brick your PineTime, so don't do this unless you've tried it a few times on a devkit and feel confident. Also consider the fact that once you go to Watchful, there is no way to go back at the moment.
-
-*I take no responsibilty of broken PineTimes, you are hereby warned :)*
-
-With that out of the way, 
-
-* Update your PineTime to Infinity 1.13.0
-* Download the `watchful-reloader` from the [latest release](https://github.com/lulf/watchful/releases)
-* Use whatever [update mechanism that works with InfiniTime](https://github.com/InfiniTimeOrg/InfiniTime/blob/main/doc/gettingStarted/updating-software.md).
+The `infinitime-recovery` app allows you to move from previous versions of Watchful to the new.
