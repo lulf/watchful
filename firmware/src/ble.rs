@@ -1,5 +1,6 @@
 use defmt::{info, unwrap, warn};
 use embassy_executor::Spawner;
+use embassy_futures::select::{select, Either};
 use embedded_storage::nor_flash::NorFlash;
 use heapless::Vec;
 use nrf_dfu_target::prelude::{DfuRequest, DfuStatus, DfuTarget, FirmwareInfo, FirmwareType, HardwareInfo};
@@ -54,7 +55,7 @@ pub struct NrfDfuService {
 #[gatt_server]
 pub struct PineTimeServer {
     dfu: NrfDfuService,
-    // uart: NrfUartService,
+    uart: NrfUartService,
 }
 
 /*
@@ -175,7 +176,7 @@ pub fn start(spawner: Spawner, controller: NrfController, dfu_config: DfuConfig<
         stack,
         GapConfig::Peripheral(PeripheralConfig {
             name: "Watchful",
-            appearance: &appearance::power_device::GENERIC_POWER_DEVICE,
+            appearance: &appearance::watch::SMARTWATCH,
         }),
     ));
     static SERVER: StaticCell<PineTimeServer<'static, 'static, NrfController>> = StaticCell::new();
@@ -192,7 +193,7 @@ async fn ble_task(mut runner: Runner<'static, NrfController>) {
 }
 
 #[embassy_executor::task]
-async fn gatt_task(server: &'static PineTimeServer<'_, '_, NrfController>) {
+async fn gatt_task(server: &'static PineTimeServer<'static, 'static, NrfController>) {
     unwrap!(server.run().await);
 }
 
@@ -200,7 +201,7 @@ async fn gatt_task(server: &'static PineTimeServer<'_, '_, NrfController>) {
 async fn advertise_task(
     stack: Stack<'static, NrfController>,
     mut peripheral: Peripheral<'static, NrfController>,
-    server: &'static PineTimeServer<'_, '_, NrfController>,
+    server: &'static PineTimeServer<'static, 'static, NrfController>,
     mut dfu_config: DfuConfig<'static>,
 ) {
     let mut advertiser_data = [0; 31];
@@ -212,18 +213,18 @@ async fn advertise_task(
         ],
         &mut advertiser_data[..],
     ));
-    let mut advertiser = unwrap!(
-        peripheral
-            .advertise(
-                &Default::default(),
-                Advertisement::ConnectableScannableUndirected {
-                    adv_data: &advertiser_data[..],
-                    scan_data: &[],
-                },
-            )
-            .await
-    );
     loop {
+        let advertiser = unwrap!(
+            peripheral
+                .advertise(
+                    &Default::default(),
+                    Advertisement::ConnectableScannableUndirected {
+                        adv_data: &advertiser_data[..],
+                        scan_data: &[],
+                    },
+                )
+                .await
+        );
         match advertiser.accept().await {
             Ok(conn) => process(stack, conn, server, &mut dfu_config).await,
             Err(e) => {
@@ -267,12 +268,12 @@ async fn process(
 
     loop {
         match connection.next().await {
-            ConnectionEvent::Disconnected { reason: _ } => {
+            ConnectionEvent::Disconnected { reason } => {
+                defmt::info!("[ble] disconnected: {:?}", reason);
                 break;
             }
             ConnectionEvent::Gatt { event, connection } => match event {
                 GattEvent::Write { value_handle } => {
-                    defmt::info!("Gatt write!");
                     /*
                     if let Some(DfuStatus::DoneReset) =
                         server.handle(&mut target, &mut dfu, connection, value_handle).await
@@ -299,22 +300,33 @@ async fn process(
 
 #[embassy_executor::task]
 async fn sync_time(stack: Stack<'static, NrfController>, conn: Connection<'static>) {
-    info!("Synchronizing time, creating gatt client");
+    info!("[ble] synchronizing time");
     let client = unwrap!(GattClient::<_, 10, 24>::new(stack, &conn).await);
+    match select(client.task(), async {
+        let services = client.services_by_uuid(&Uuid::new_short(0x1805)).await?;
+        if let Some(service) = services.first() {
+            let c: Characteristic<u8> = client
+                .characteristic_by_uuid(&service, &Uuid::new_short(0x2a2b))
+                .await?;
 
-    info!("Discovering time service");
-    let services = unwrap!(client.services_by_uuid(&Uuid::new_short(0x1805)).await);
-    let service = services.first().unwrap().clone();
+            let mut data = [0; 10];
+            client.read_characteristic(&c, &mut data[..]).await?;
 
-    info!("Looking for value handle");
-    let c: Characteristic<u8> = unwrap!(client.characteristic_by_uuid(&service, &Uuid::new_short(0x2a2b)).await);
-
-    info!("Reading characteristic");
-    let mut data = [0; 10];
-    unwrap!(client.read_characteristic(&c, &mut data[..]).await);
-
-    if let Some(time) = parse_time(data) {
-        crate::CLOCK.set(time);
+            if let Some(time) = parse_time(data) {
+                crate::CLOCK.set(time);
+            }
+        }
+        Ok::<(), BleHostError<nrf_sdc::Error>>(())
+    })
+    .await
+    {
+        Either::First(_) => panic!("[ble] gatt client exited prematurely"),
+        Either::Second(Ok(_)) => {
+            info!("[ble] time sync completed");
+        }
+        Either::Second(Err(e)) => {
+            warn!("[ble] time sync error: {:?}", e);
+        }
     }
 }
 

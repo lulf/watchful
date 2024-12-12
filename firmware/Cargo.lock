@@ -387,9 +387,8 @@ dependencies = [
 
 [[package]]
 name = "embassy-executor"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09ed0e24bdd4a5f4ff1b72ee4f264b1d23e179ea71a77d984b5fd24877a2bbe1"
+version = "0.6.3"
+source = "git+https://github.com/embassy-rs/embassy.git?rev=fe79af56141adfeacb3cfcefc4400da0c5aabb5f#fe79af56141adfeacb3cfcefc4400da0c5aabb5f"
 dependencies = [
  "cortex-m 0.7.7",
  "critical-section",
@@ -402,9 +401,8 @@ dependencies = [
 
 [[package]]
 name = "embassy-executor-macros"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4d4c0c34b32c2c653c9eecce1cefaf8539dd9a54e61deb5499254f01e2fcac2"
+version = "0.6.2"
+source = "git+https://github.com/embassy-rs/embassy.git?rev=fe79af56141adfeacb3cfcefc4400da0c5aabb5f#fe79af56141adfeacb3cfcefc4400da0c5aabb5f"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -1470,7 +1468,7 @@ dependencies = [
 [[package]]
 name = "trouble-host"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/trouble.git?rev=b470edeff6eeb76655ee69d503f3776a166a7375#b470edeff6eeb76655ee69d503f3776a166a7375"
+source = "git+https://github.com/embassy-rs/trouble.git?rev=aa9a17f4aef51e67744fa922ba8c02c4bbf13fc2#aa9a17f4aef51e67744fa922ba8c02c4bbf13fc2"
 dependencies = [
  "bt-hci",
  "defmt",
@@ -1490,7 +1488,7 @@ dependencies = [
 [[package]]
 name = "trouble-host-macros"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/trouble.git?rev=b470edeff6eeb76655ee69d503f3776a166a7375#b470edeff6eeb76655ee69d503f3776a166a7375"
+source = "git+https://github.com/embassy-rs/trouble.git?rev=aa9a17f4aef51e67744fa922ba8c02c4bbf13fc2#aa9a17f4aef51e67744fa922ba8c02c4bbf13fc2"
 dependencies = [
  "Inflector",
  "darling",
@@ -1695,8 +1693,3 @@ checksum = "36c1fec1a2bb5866f07c25f68c26e565c4c200aebb96d7e55710c19d3e8ac49b"
 dependencies = [
  "memchr",
 ]
-
-[[patch.unused]]
-name = "embassy-executor"
-version = "0.6.3"
-source = "git+https://github.com/embassy-rs/embassy.git?rev=fe79af56141adfeacb3cfcefc4400da0c5aabb5f#fe79af56141adfeacb3cfcefc4400da0c5aabb5f"

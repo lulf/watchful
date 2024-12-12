@@ -56,7 +56,7 @@ vergen = { version = "8", features = ["build", "git", "gitcl"] }
 hrs3300 = { git = "https://github.com/lulf/hrs3300-rs.git", branch = "hal-1.0" }
 nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "9696ce04fd417dc5c448edbafab3fef23f2f34cd" }
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "9696ce04fd417dc5c448edbafab3fef23f2f34cd" }
-trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "b470edeff6eeb76655ee69d503f3776a166a7375"}
+trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "aa9a17f4aef51e67744fa922ba8c02c4bbf13fc2"}
 
 embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "fe79af56141adfeacb3cfcefc4400da0c5aabb5f" }
 embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git", rev = "fe79af56141adfeacb3cfcefc4400da0c5aabb5f" }
