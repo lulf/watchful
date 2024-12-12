@@ -66,5 +66,5 @@ jobs:
         gh release create "$tag" \
             --repo="$GITHUB_REPOSITORY" \
             --title="${GITHUB_REPOSITORY#*/} ${tag#v}" \
-            --generate-notes
+            --generate-notes \
             ./firmware/watchful-dfu-${TAG_VERSION}.zip
