@@ -5,19 +5,15 @@ on:
     # Run on the main branch
     branches:
       - main
-    # Releases are tags named 'v<version>', and must have the "major.minor.micro", for example: "0.1.0".
-    # Release candidates are tagged as `v<version>-rc<num>`, for example: "0.1.0-rc1".
-    tags:
-      - "v*"
   # Also on PRs, just be careful not to publish anything
   pull_request:
 
 
 jobs:
   ci:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Build
         run: |
           for p in firmware pinetime-flash watchful-ui; do
@@ -27,17 +23,17 @@ jobs:
           done
 
   publish:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install prerequisites
         run: |
           pip3 install adafruit-nrfutil
           pip3 install -r tools/mcuboot/requirements.txt
           cargo install cargo-binutils
 
-      - name: Build release artifacts
+      - name: Build artifacts
         run: |
           cd firmware
           cargo build --release
@@ -46,25 +42,19 @@ jobs:
           adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application watchful-image.bin watchful-dfu.zip
 
       - name: Upload binary
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: watchful.bin
           path: firmware/watchful.bin
 
-      - name: Upload HEX
-        uses: actions/upload-artifact@v3
-        with:
-          name: watchful.hex
-          path: firmware/watchful.hex
-
       - name: Upload Mcuboot image
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: watchful-image.bin
           path: firmware/watchful-image.bin
 
       - name: Upload DFU bundle
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: watchful-dfu.zip
           path: firmware/watchful-dfu.zip

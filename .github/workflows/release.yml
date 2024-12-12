@@ -1,0 +1,71 @@
+name: Release
+on:
+  push:
+    tags:
+     - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  # Re Run the Checks
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          for p in firmware pinetime-flash watchful-ui; do
+            pushd $p;
+            cargo build --release;
+            popd;
+          done
+
+  release:
+    # Only run if the checks pass
+    name: Publish to crates.io
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Verify Version
+      run: |
+        cd firmware
+        TAG_VERSION=${GITHUB_REF#refs/tags/v}
+        CARGO_VERSION=$(grep '^version =' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
+        if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+          echo "Version mismatch: tag is $TAG_VERSION but Cargo.toml is $CARGO_VERSION"
+          exit 1  # Exits with a non-zero status to fail the workflow
+        fi
+      shell: bash
+
+    - name: Install prerequisites
+      run: |
+        pip3 install adafruit-nrfutil
+        pip3 install -r tools/mcuboot/requirements.txt
+        cargo install cargo-binutils
+
+    - name: Build release artifacts
+      run: |
+        cd firmware
+        cargo build --release
+        cargo objcopy --release -- -O binary watchful.bin
+        ../tools/mcuboot/imgtool.py create --align 4 --version 1.0.0 --header-size 32 --slot-size 475136 --pad-header watchful.bin watchful-image.bin
+        adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application watchful-image.bin watchful-dfu.zip
+        TAG_VERSION=${GITHUB_REF#refs/tags/v}
+        mv watchful-dfu.zip ../watchful-dfu-${TAG_VERSION}.zip
+
+    - name: Create GitHub release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        tag: ${{ github.ref_name }}
+      run: |
+        TAG_VERSION=${GITHUB_REF#refs/tags/v}
+        gh release create "$tag" \
+            --repo="$GITHUB_REPOSITORY" \
+            --title="${GITHUB_REPOSITORY#*/} ${tag#v}" \
+            --generate-notes
+            watchful-dfu-${TAG_VERSION}.zip
