@@ -214,47 +214,21 @@ impl MenuState {
                 MenuAction::Brightness => {
                     device.screen.change_brightness();
                     WatchState::Menu(MenuState::new(MenuView::settings()))
-                },
+                }
                 MenuAction::Reset => {
                     cortex_m::peripheral::SCB::sys_reset();
                 }
                 MenuAction::FirmwareSettings => {
-                    /*
-                    let validated = FwState::Boot
-                        == device
-                            .firmware
-                            .get_state()
-                            .await
-                            .expect("Failed to read firmware state");
-                    */
-                    let validated = false;
+                    let validated = device.firmware_validator.is_valid();
                     WatchState::Menu(MenuState::new(MenuView::firmware_settings(
                         firmware_details(&mut device.battery, validated).await,
                     )))
                 }
                 MenuAction::ValidateFirmware => {
                     info!("Validate firmware");
-                    WatchState::Time(TimeState::new(device, Timeout::new(IDLE_TIMEOUT)).await)
-                    /*
-                    let validated = FwState::Boot
-                        == device
-                            .firmware
-                            .get_state()
-                            .await
-                            .expect("Failed to read firmware state");
-                    if !validated {
-                        device
-                            .firmware
-                            .mark_booted()
-                            .await
-                            .expect("Failed to mark current firmware as good");
-                        info!("Firmware marked as valid");
-                        WatchState::Menu(MenuState::new(MenuView::main()))
-                    } else {
-                        WatchState::Menu(MenuState::new(MenuView::firmware_settings(
-                            firmware_details(&mut device.battery, validated).await,
-                        )))
-                    }*/
+                    device.firmware_validator.validate().await;
+                    info!("Firmware marked as valid");
+                    WatchState::Menu(MenuState::new(MenuView::main()))
                 }
             },
         }

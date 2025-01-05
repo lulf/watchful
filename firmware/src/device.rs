@@ -11,6 +11,7 @@ use embassy_time::{Duration, Timer};
 use mipidsi::models::ST7789;
 
 use crate::clock::Clock;
+use crate::firmware_validator::FirmwareValidator;
 
 pub type Touchpad<'a> = cst816s::CST816S<I2cDevice<'a, NoopRawMutex, twim::Twim<'a, TWISPI1>>, Input<'a>, Output<'a>>;
 pub type Hrs<'a> = hrs3300::Hrs3300<I2cDevice<'a, NoopRawMutex, twim::Twim<'a, TWISPI1>>>;
@@ -27,6 +28,7 @@ pub struct Device<'a> {
     pub battery: Battery<'static>,
     pub touchpad: Touchpad<'static>,
     pub hrs: Hrs<'static>,
+    pub firmware_validator: FirmwareValidator<'static>,
 }
 
 impl<'a> Device<'a> {}
