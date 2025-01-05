@@ -211,6 +211,10 @@ impl MenuState {
                     WatchState::Time(TimeState::new(device, Timeout::new(IDLE_TIMEOUT)).await)
                 }
                 MenuAction::Settings => WatchState::Menu(MenuState::new(MenuView::settings())),
+                MenuAction::Brightness => {
+                    device.screen.change_brightness();
+                    WatchState::Menu(MenuState::new(MenuView::settings()))
+                },
                 MenuAction::Reset => {
                     cortex_m::peripheral::SCB::sys_reset();
                 }

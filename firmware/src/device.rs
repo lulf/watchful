@@ -2,7 +2,7 @@ use display_interface_spi::SPIInterface;
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_futures::select::{select, Either};
-use embassy_nrf::gpio::{Input, Output};
+use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive};
 use embassy_nrf::peripherals::{TWISPI0, TWISPI1};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::{saadc, twim};
@@ -76,13 +76,76 @@ impl<'a> Battery<'a> {
     }
 }
 
+pub enum BacklightLevel {
+    Low,
+    Medium,
+    High,
+}
+
+pub struct Backlight<'a> {
+    low: Output<'a>,
+    med: Output<'a>,
+    high: Output<'a>,
+    level: BacklightLevel,
+}
+
+impl<'a> Backlight<'a> {
+    pub fn new(low_pin: AnyPin, med_pin: AnyPin, high_pin: AnyPin) -> Self {
+        let backlight_low = Output::new(low_pin, Level::High, OutputDrive::Standard); // Low backlight
+        let backlight_med = Output::new(med_pin, Level::High, OutputDrive::Standard); // Medium backlight
+        let backlight_high = Output::new(high_pin, Level::High, OutputDrive::Standard); // High backlight
+        Self {
+            low: backlight_low,
+            med: backlight_med,
+            high: backlight_high,
+            level: BacklightLevel::Medium,
+        }
+    }
+
+    fn set_level(&mut self, level: BacklightLevel) {
+        self.level = level;
+    }
+
+    fn off(&mut self) {
+        self.low.set_high();
+        self.med.set_high();
+        self.high.set_high();
+    }
+
+    fn on(&mut self) {
+        match self.level {
+            BacklightLevel::Low => self.set_low(),
+            BacklightLevel::Medium => self.set_medium(),
+            BacklightLevel::High => self.set_high(),
+        }
+    }
+
+    fn set_low(&mut self) {
+        self.low.set_low();
+        self.med.set_high();
+        self.high.set_high();
+    }
+
+    fn set_medium(&mut self) {
+        self.low.set_high();
+        self.med.set_low();
+        self.high.set_high();
+    }
+
+    fn set_high(&mut self) {
+        self.low.set_high();
+        self.med.set_high();
+        self.high.set_low();
+    }
+}
+
 pub struct Screen<'a> {
     display: Display<'a>,
-    backlight: Output<'a>,
+    backlight: Backlight<'a>,
 }
 
 impl<'a> Screen<'a> {
-    pub fn new(display: Display<'a>, backlight: Output<'a>) -> Self {
+    pub fn new(display: Display<'a>, backlight: Backlight<'a>) -> Self {
         Self { display, backlight }
     }
 
@@ -91,11 +154,19 @@ impl<'a> Screen<'a> {
     }
 
     pub fn on(&mut self) {
-        self.backlight.set_low();
+        self.backlight.on();
     }
 
     pub fn off(&mut self) {
-        self.backlight.set_high();
+        self.backlight.off();
+    }
+
+    pub fn change_brightness(&mut self) {
+        match self.backlight.level {
+            BacklightLevel::Low => self.backlight.set_level(BacklightLevel::Medium),
+            BacklightLevel::Medium => self.backlight.set_level(BacklightLevel::High),
+            BacklightLevel::High => self.backlight.set_level(BacklightLevel::Low),
+        }
     }
 }
 

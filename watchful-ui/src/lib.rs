@@ -195,6 +195,7 @@ pub enum MenuAction {
     Settings,
     FirmwareSettings,
     ValidateFirmware,
+    Brightness,
     Reset,
 }
 
@@ -207,6 +208,7 @@ pub enum MenuView {
     },
     Settings {
         firmware: MenuItem,
+        brightness: MenuItem,
         reset: MenuItem,
     },
     Firmware {
@@ -227,6 +229,7 @@ impl MenuView {
     pub fn settings() -> Self {
         Self::Settings {
             firmware: MenuItem::new("Firmware", 0),
+            brightness: MenuItem::new("Brightness", 1),
             reset: MenuItem::new("Reset", 2),
         }
     }
@@ -253,8 +256,9 @@ impl MenuView {
                 settings.draw(display)?;
             }
 
-            Self::Settings { firmware, reset } => {
+            Self::Settings { firmware, brightness, reset } => {
                 firmware.draw(display)?;
+                brightness.draw(display)?;
                 reset.draw(display)?;
             }
 
@@ -284,9 +288,11 @@ impl MenuView {
                     None
                 }
             }
-            Self::Settings { firmware, reset } => {
+            Self::Settings { firmware, brightness, reset } => {
                 if firmware.is_clicked(input) {
                     Some(MenuAction::FirmwareSettings)
+                } else if brightness.is_clicked(input) {
+                    Some(MenuAction::Brightness)
                 } else if reset.is_clicked(input) {
                     Some(MenuAction::Reset)
                 } else {
