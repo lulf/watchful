@@ -960,7 +960,9 @@ dependencies = [
 
 [[package]]
 name = "nrf-dfu-target"
-version = "0.2.0"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45f9ac7f9a8086a92b33b741b8de8691b95d01b3c0ac3abdce8a3359da07b943"
 dependencies = [
  "defmt",
  "embedded-storage-async",
