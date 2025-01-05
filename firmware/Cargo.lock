@@ -277,9 +277,9 @@ dependencies = [
 
 [[package]]
 name = "defmt"
-version = "0.3.8"
+version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a99dd22262668b887121d4672af5a64b238f026099f1a2a1b322066c9ecfe9e0"
+checksum = "86f6162c53f659f65d00619fe31f14556a6e9f8752ccc4a41bd177ffcf3d6130"
 dependencies = [
  "bitflags 1.3.2",
  "defmt-macros",
@@ -287,12 +287,12 @@ dependencies = [
 
 [[package]]
 name = "defmt-macros"
-version = "0.3.9"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3a9f309eff1f79b3ebdf252954d90ae440599c26c2c553fe87a2d17195f2dcb"
+checksum = "9d135dd939bad62d7490b0002602d35b358dce5fd9233a709d3c1ef467d4bde6"
 dependencies = [
  "defmt-parser",
- "proc-macro-error",
+ "proc-macro-error2",
  "proc-macro2",
  "quote",
  "syn 2.0.89",
@@ -300,11 +300,11 @@ dependencies = [
 
 [[package]]
 name = "defmt-parser"
-version = "0.3.4"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff4a5fefe330e8d7f31b16a318f9ce81000d8e35e69b93eae154d16d2278f70f"
+checksum = "3983b127f13995e68c1e29071e5d115cd96f215ccb5e6812e3728cd6f92653b3"
 dependencies = [
- "thiserror 1.0.63",
+ "thiserror",
 ]
 
 [[package]]
@@ -567,6 +567,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-hal-bus"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d3980bf28e8577db59fe2bdb3df868a419469d2cecb363644eea2b6f7797669"
+dependencies = [
+ "critical-section",
+ "embedded-hal 1.0.0",
+ "portable-atomic",
+]
+
+[[package]]
 name = "embedded-iconoir"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -813,6 +824,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
 dependencies = [
+ "defmt",
  "hash32",
  "stable_deref_trait",
 ]
@@ -948,18 +960,18 @@ dependencies = [
 
 [[package]]
 name = "nrf-dfu-target"
-version = "0.1.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2af922019ee9ba64c28651ea31d983fffdbb64527ca929a90baad8b6f704f6a"
+checksum = "45f9ac7f9a8086a92b33b741b8de8691b95d01b3c0ac3abdce8a3359da07b943"
 dependencies = [
  "defmt",
- "embedded-storage",
+ "embedded-storage-async",
 ]
 
 [[package]]
 name = "nrf-mpsl"
 version = "0.1.0"
-source = "git+https://github.com/alexmoon/nrf-sdc.git?rev=9696ce04fd417dc5c448edbafab3fef23f2f34cd#9696ce04fd417dc5c448edbafab3fef23f2f34cd"
+source = "git+https://github.com/alexmoon/nrf-sdc.git?rev=1dd59a3bc60309cb7f12ca2ba52566d63225a394#1dd59a3bc60309cb7f12ca2ba52566d63225a394"
 dependencies = [
  "cortex-m 0.7.7",
  "critical-section",
@@ -975,7 +987,7 @@ dependencies = [
 [[package]]
 name = "nrf-mpsl-sys"
 version = "0.1.0"
-source = "git+https://github.com/alexmoon/nrf-sdc.git?rev=9696ce04fd417dc5c448edbafab3fef23f2f34cd#9696ce04fd417dc5c448edbafab3fef23f2f34cd"
+source = "git+https://github.com/alexmoon/nrf-sdc.git?rev=1dd59a3bc60309cb7f12ca2ba52566d63225a394#1dd59a3bc60309cb7f12ca2ba52566d63225a394"
 dependencies = [
  "bindgen",
  "doxygen-rs",
@@ -993,7 +1005,7 @@ dependencies = [
 [[package]]
 name = "nrf-sdc"
 version = "0.1.0"
-source = "git+https://github.com/alexmoon/nrf-sdc.git?rev=9696ce04fd417dc5c448edbafab3fef23f2f34cd#9696ce04fd417dc5c448edbafab3fef23f2f34cd"
+source = "git+https://github.com/alexmoon/nrf-sdc.git?rev=1dd59a3bc60309cb7f12ca2ba52566d63225a394#1dd59a3bc60309cb7f12ca2ba52566d63225a394"
 dependencies = [
  "bt-hci",
  "critical-section",
@@ -1011,7 +1023,7 @@ dependencies = [
 [[package]]
 name = "nrf-sdc-sys"
 version = "0.1.0"
-source = "git+https://github.com/alexmoon/nrf-sdc.git?rev=9696ce04fd417dc5c448edbafab3fef23f2f34cd#9696ce04fd417dc5c448edbafab3fef23f2f34cd"
+source = "git+https://github.com/alexmoon/nrf-sdc.git?rev=1dd59a3bc60309cb7f12ca2ba52566d63225a394#1dd59a3bc60309cb7f12ca2ba52566d63225a394"
 dependencies = [
  "bindgen",
  "doxygen-rs",
@@ -1145,8 +1157,10 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.6.0",
  "defmt",
+ "embassy-futures",
  "embedded-hal 1.0.0",
  "embedded-storage",
+ "embedded-storage-async",
 ]
 
 [[package]]
@@ -1175,27 +1189,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "proc-macro-error"
-version = "1.0.4"
+name = "proc-macro-error-attr2"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da25490ff9892aab3fcf7c36f08cfb902dd3e71ca0f9f9517bea02a73a5ce38c"
+checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
 dependencies = [
- "proc-macro-error-attr",
  "proc-macro2",
  "quote",
- "syn 1.0.109",
- "version_check",
 ]
 
 [[package]]
-name = "proc-macro-error-attr"
-version = "1.0.4"
+name = "proc-macro-error2"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1be40180e52ecc98ad80b184934baf3d0d29f979574e439af5a55274b35f869"
+checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
 dependencies = [
+ "proc-macro-error-attr2",
  "proc-macro2",
  "quote",
- "version_check",
+ "syn 2.0.89",
 ]
 
 [[package]]
@@ -1394,31 +1406,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.63"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0342370b38b6a11b6cc11d6a805569958d54cfa061a29969c3b5ce2ea405724"
-dependencies = [
- "thiserror-impl 1.0.63",
-]
-
-[[package]]
-name = "thiserror"
 version = "2.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c006c85c7651b3cf2ada4584faa36773bd07bac24acfb39f3c431b36d7e667aa"
 dependencies = [
- "thiserror-impl 2.0.3",
-]
-
-[[package]]
-name = "thiserror-impl"
-version = "1.0.63"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4558b58466b9ad7ca0f102865eccc95938dca1a74a856f2b57b6629050da261"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.89",
+ "thiserror-impl",
 ]
 
 [[package]]
@@ -1468,7 +1460,7 @@ dependencies = [
 [[package]]
 name = "trouble-host"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/trouble.git?rev=aa9a17f4aef51e67744fa922ba8c02c4bbf13fc2#aa9a17f4aef51e67744fa922ba8c02c4bbf13fc2"
+source = "git+https://github.com/embassy-rs/trouble.git?rev=07fa452e836f07a302596edb6a61e060d242e4ea#07fa452e836f07a302596edb6a61e060d242e4ea"
 dependencies = [
  "bt-hci",
  "defmt",
@@ -1481,14 +1473,14 @@ dependencies = [
  "heapless",
  "num_enum",
  "static_cell 2.1.0",
- "thiserror 2.0.3",
+ "thiserror",
  "trouble-host-macros",
 ]
 
 [[package]]
 name = "trouble-host-macros"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/trouble.git?rev=aa9a17f4aef51e67744fa922ba8c02c4bbf13fc2#aa9a17f4aef51e67744fa922ba8c02c4bbf13fc2"
+source = "git+https://github.com/embassy-rs/trouble.git?rev=07fa452e836f07a302596edb6a61e060d242e4ea#07fa452e836f07a302596edb6a61e060d242e4ea"
 dependencies = [
  "Inflector",
  "darling",
@@ -1586,9 +1578,12 @@ dependencies = [
  "embassy-time",
  "embedded-graphics",
  "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "embedded-hal-bus",
  "embedded-io",
  "embedded-io-async",
  "embedded-storage",
+ "embedded-storage-async",
  "embedded-text",
  "futures",
  "heapless",

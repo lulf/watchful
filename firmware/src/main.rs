@@ -1,4 +1,5 @@
 #![cfg_attr(not(test), no_std)]
+#![feature(impl_trait_in_assoc_type)]
 #![no_main]
 
 use core::cell::RefCell;
@@ -7,7 +8,7 @@ use defmt::unwrap;
 use defmt_rtt as _;
 use device::Backlight;
 use display_interface_spi::SPIInterface;
-use embassy_embedded_hal::flash::partition::{BlockingPartition, Partition};
+use embassy_embedded_hal::flash::partition::Partition;
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_executor::Spawner;
@@ -54,8 +55,7 @@ static CLOCK: clock::Clock = clock::Clock::new();
 type ExternalFlash = XtFlash<SpiDevice<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static>>>;
 
 type InternalFlash = mpsl::Flash<'static>;
-type StatePartition<'a> = Partition<'a, NoopRawMutex, InternalFlash>;
-type DfuPartition<'a> = BlockingPartition<'a, NoopRawMutex, ExternalFlash>;
+type DfuPartition<'a> = Partition<'a, NoopRawMutex, ExternalFlash>;
 
 static I2C_BUS: StaticCell<BMutex<NoopRawMutex, RefCell<Twim<'static, TWISPI1>>>> = StaticCell::new();
 static SPI_BUS: StaticCell<BMutex<NoopRawMutex, RefCell<Spim<'static, TWISPI0>>>> = StaticCell::new();
@@ -84,6 +84,12 @@ fn build_sdc<'d, const N: usize>(
         .support_adv()?
         .support_peripheral()?
         .peripheral_count(1)?
+        .buffer_cfg(
+            ble::L2CAP_MTU as u8,
+            ble::L2CAP_MTU as u8,
+            ble::L2CAP_TXQ,
+            ble::L2CAP_RXQ,
+        )?
         .build(p, rng, mpsl, mem)
 }
 
@@ -120,7 +126,7 @@ async fn main(s: Spawner) {
 
     let rng = rng::Rng::new(p.RNG, Irqs);
 
-    static SDC_MEM: StaticCell<sdc::Mem<1448>> = StaticCell::new();
+    static SDC_MEM: StaticCell<sdc::Mem<4096>> = StaticCell::new();
     let sdc_mem = SDC_MEM.init(sdc::Mem::new());
 
     static RNG: StaticCell<rng::Rng<'static, RNG>> = StaticCell::new();
@@ -175,8 +181,8 @@ async fn main(s: Spawner) {
     let flash_cs = Output::new(p.P0_05, Level::High, OutputDrive::Standard);
     let flash_spi = SpiDevice::new(spi_bus, flash_cs);
     let xt_flash = XtFlash::new(flash_spi).unwrap();
-    static EXTERNAL_FLASH: StaticCell<BMutex<NoopRawMutex, RefCell<ExternalFlash>>> = StaticCell::new();
-    let external_flash = EXTERNAL_FLASH.init(BMutex::new(RefCell::new(xt_flash)));
+    static EXTERNAL_FLASH: StaticCell<Mutex<NoopRawMutex, ExternalFlash>> = StaticCell::new();
+    let external_flash = EXTERNAL_FLASH.init(Mutex::new(xt_flash));
 
     let internal_flash = mpsl::Flash::take(mpsl, p.NVMC);
     static INTERNAL_FLASH: StaticCell<Mutex<NoopRawMutex, InternalFlash>> = StaticCell::new();
@@ -237,10 +243,9 @@ async fn watchdog_task() {
 
 #[derive(Clone)]
 pub struct DfuConfig<'a> {
+    #[allow(dead_code)]
     internal: &'a Mutex<NoopRawMutex, InternalFlash>,
-    external: &'a BMutex<NoopRawMutex, RefCell<ExternalFlash>>,
-    state_start: u32,
-    state_end: u32,
+    external: &'a Mutex<NoopRawMutex, ExternalFlash>,
     dfu_start: u32,
     dfu_end: u32,
 }
@@ -248,31 +253,18 @@ pub struct DfuConfig<'a> {
 impl<'a> DfuConfig<'a> {
     pub fn new(
         internal: &'a Mutex<NoopRawMutex, InternalFlash>,
-        external: &'a BMutex<NoopRawMutex, RefCell<ExternalFlash>>,
+        external: &'a Mutex<NoopRawMutex, ExternalFlash>,
     ) -> Self {
-        unsafe {
-            let dfu_start = u32::MAX;
-            let dfu_end = u32::MAX;
+        let dfu_start = 0x40000;
+        let dfu_end = 0xB4000;
 
-            //BlockingPartition::new(external, dfu_start, dfu_end - dfu_start);
-
-            let state_start = u32::MAX;
-            let state_end = u32::MAX;
-
-            //Partition::new(internal, state_start, state_end - state_start);
-            Self {
-                internal,
-                external,
-                state_start,
-                state_end,
-                dfu_start,
-                dfu_end,
-            }
+        Partition::new(external, dfu_start, dfu_end - dfu_start);
+        Self {
+            internal,
+            external,
+            dfu_start,
+            dfu_end,
         }
-    }
-
-    pub fn state(&self) -> StatePartition<'a> {
-        StatePartition::new(self.internal, self.state_start, self.state_end - self.state_start)
     }
 
     pub fn dfu(&self) -> DfuPartition<'a> {
