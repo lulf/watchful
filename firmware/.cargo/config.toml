@@ -11,4 +11,4 @@ runner = "probe-rs run --chip nRF52832_xxAA"
 target = "thumbv7em-none-eabi"
 
 [env]
-DEFMT_LOG = "info"
+DEFMT_LOG = "info,trouble_host=trace"

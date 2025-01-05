@@ -1,8 +1,8 @@
 use bitflags::bitflags;
+use embassy_futures::yield_now;
 use embedded_hal::spi::{Operation, SpiDevice};
-use embedded_storage::nor_flash::{
-    check_erase, check_write, ErrorType, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
-};
+use embedded_storage::nor_flash::{ErrorType, NorFlashError, NorFlashErrorKind};
+use embedded_storage_async::nor_flash::{NorFlash, ReadNorFlash};
 
 const PAGE_SIZE: usize = 256;
 const ERASE_SIZE: usize = 4096;
@@ -81,7 +81,7 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
         Ok(Self { spi })
     }
 
-    pub fn erase(&mut self, from: u32, to: u32) -> Result<(), Error<SPI::Error>> {
+    pub async fn erase(&mut self, from: u32, to: u32) -> Result<(), Error<SPI::Error>> {
         check_erase(self, from, to).map_err(Error::Flash)?;
 
         // info!("Erase 0x{:x} - 0x{:x}", from, to);
@@ -97,6 +97,7 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
             ])])?;
 
             self.wait_done()?;
+            yield_now().await;
         }
 
         Ok(())
@@ -130,7 +131,7 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
         Ok(())
     }
 
-    pub fn write(&mut self, mut write_offset: u32, data: &[u8]) -> Result<(), Error<SPI::Error>> {
+    pub async fn write(&mut self, mut write_offset: u32, data: &[u8]) -> Result<(), Error<SPI::Error>> {
         check_write(self, write_offset, data.len()).map_err(Error::Flash)?;
         for chunk in data.chunks(PAGE_SIZE / 2) {
             self.write_enable()?;
@@ -143,12 +144,13 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
             self.wait_done()?;
 
             write_offset += chunk.len() as u32;
+            yield_now().await;
         }
 
         Ok(())
     }
 
-    pub fn read(&mut self, mut offset: u32, data: &mut [u8]) -> Result<(), Error<SPI::Error>> {
+    pub async fn read(&mut self, mut offset: u32, data: &mut [u8]) -> Result<(), Error<SPI::Error>> {
         for chunk in data.chunks_mut(PAGE_SIZE / 2) {
             let off = offset.to_be_bytes();
             let cmd = [OpCode::Read as u8, off[1], off[2], off[3]];
@@ -156,6 +158,7 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
             self.spi
                 .transaction(&mut [Operation::Write(&cmd[..]), Operation::Read(chunk)])?;
             offset += chunk.len() as u32;
+            yield_now().await;
         }
 
         Ok(())
@@ -181,9 +184,9 @@ impl<SPI: SpiDevice> ErrorType for XtFlash<SPI> {
 
 impl<SPI: SpiDevice> ReadNorFlash for XtFlash<SPI> {
     const READ_SIZE: usize = 1;
-    fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), Self::Error> {
+    async fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), Self::Error> {
         slice_in_ram_or(buf, Error::NotInRam)?;
-        XtFlash::read(self, offset, buf)
+        XtFlash::read(self, offset, buf).await
     }
 
     fn capacity(&self) -> usize {
@@ -195,13 +198,13 @@ impl<SPI: SpiDevice> NorFlash for XtFlash<SPI> {
     const WRITE_SIZE: usize = 1;
     const ERASE_SIZE: usize = ERASE_SIZE;
 
-    fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
-        XtFlash::erase(self, from, to)
+    async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
+        XtFlash::erase(self, from, to).await
     }
 
-    fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), Self::Error> {
+    async fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), Self::Error> {
         slice_in_ram_or(data, Error::NotInRam)?;
-        XtFlash::write(self, offset, data)
+        XtFlash::write(self, offset, data).await
     }
 }
 
@@ -230,4 +233,32 @@ pub(crate) fn slice_in_ram_or<T, E>(slice: *const [T], err: E) -> Result<(), E> 
     } else {
         Err(err)
     }
+}
+
+/// Return whether an erase operation is aligned and within bounds.
+fn check_erase<T: NorFlash>(flash: &T, from: u32, to: u32) -> Result<(), NorFlashErrorKind> {
+    let (from, to) = (from as usize, to as usize);
+    if from > to || to > flash.capacity() {
+        return Err(NorFlashErrorKind::OutOfBounds);
+    }
+    if from % T::ERASE_SIZE != 0 || to % T::ERASE_SIZE != 0 {
+        return Err(NorFlashErrorKind::NotAligned);
+    }
+    Ok(())
+}
+
+/// Return whether a write operation is aligned and within bounds.
+fn check_write<T: NorFlash>(flash: &T, offset: u32, length: usize) -> Result<(), NorFlashErrorKind> {
+    check_slice(flash, T::WRITE_SIZE, offset, length)
+}
+
+fn check_slice<T: ReadNorFlash>(flash: &T, align: usize, offset: u32, length: usize) -> Result<(), NorFlashErrorKind> {
+    let offset = offset as usize;
+    if length > flash.capacity() || offset > flash.capacity() - length {
+        return Err(NorFlashErrorKind::OutOfBounds);
+    }
+    if offset % align != 0 || length % align != 0 {
+        return Err(NorFlashErrorKind::NotAligned);
+    }
+    Ok(())
 }
