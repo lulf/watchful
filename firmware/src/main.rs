@@ -5,6 +5,7 @@ use core::cell::RefCell;
 
 use defmt::unwrap;
 use defmt_rtt as _;
+use device::Backlight;
 use display_interface_spi::SPIInterface;
 use embassy_embedded_hal::flash::partition::{BlockingPartition, Partition};
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
@@ -188,8 +189,7 @@ async fn main(s: Spawner) {
     ble::start(s, sdc, dfu_config);
 
     // Display
-
-    let mut backlight = Output::new(p.P0_22.degrade(), Level::Low, OutputDrive::Standard); // Medium backlight
+    let backlight = Backlight::new(p.P0_14.degrade(), p.P0_22.degrade(), p.P0_23.degrade());
     let rst = Output::new(p.P0_26, Level::Low, OutputDrive::Standard);
     let display_cs = Output::new(p.P0_25, Level::High, OutputDrive::Standard); // Keep low while driving display
     let display_spi = SpiDevice::new(spi_bus, display_cs);
@@ -202,8 +202,6 @@ async fn main(s: Spawner) {
         .init(&mut Delay)
         .unwrap();
     display.set_orientation(Orientation::new()).unwrap();
-
-    backlight.set_high();
 
     let screen = Screen::new(display, backlight);
     let mut device: Device<'_> = Device {
