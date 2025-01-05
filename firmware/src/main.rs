@@ -30,9 +30,12 @@ use panic_probe as _;
 use pinetime_flash::XtFlash;
 use static_cell::StaticCell;
 
+use crate::firmware_validator::FirmwareValidator;
+
 mod ble;
 mod clock;
 mod device;
+mod firmware_validator;
 mod state;
 use crate::clock::clock;
 use crate::device::{Battery, Button, Device, Hrs, Screen};
@@ -190,6 +193,7 @@ async fn main(s: Spawner) {
 
     // DFU setup
     let dfu_config = DfuConfig::new(internal_flash, external_flash);
+    let firmware_validator = FirmwareValidator::new(internal_flash);
 
     // BLE
     ble::start(s, sdc, dfu_config);
@@ -217,6 +221,7 @@ async fn main(s: Spawner) {
         battery,
         touchpad,
         hrs,
+        firmware_validator,
     };
 
     let mut state = WatchState::default();
