@@ -198,9 +198,9 @@ async fn main(s: Spawner) {
     // BLE
     ble::start(s, sdc, dfu_config);
     
-	// Vibration
-	let motor = Output::new(p.P0_16, Level::High, OutputDrive::Standard0Disconnect1);
-	let vibrator = Vibrator::new(motor);
+    // Vibration
+    let motor = Output::new(p.P0_16, Level::High, OutputDrive::Standard0Disconnect1);
+    let vibrator = Vibrator::new(motor);
 	
     // Display
     let backlight = Backlight::new(p.P0_14.degrade(), p.P0_22.degrade(), p.P0_23.degrade());
