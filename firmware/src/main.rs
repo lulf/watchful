@@ -38,7 +38,7 @@ mod device;
 mod firmware_validator;
 mod state;
 use crate::clock::clock;
-use crate::device::{Battery, Button, Device, Hrs, Screen};
+use crate::device::{Battery, Button, Device, Hrs, Screen, Vibrator};
 use crate::state::WatchState;
 
 bind_interrupts!(struct Irqs {
@@ -197,7 +197,11 @@ async fn main(s: Spawner) {
 
     // BLE
     ble::start(s, sdc, dfu_config);
-
+    
+	// Vibration
+	let motor = Output::new(p.P0_16, Level::High, OutputDrive::Standard0Disconnect1);
+	let vibrator = Vibrator::new(motor);
+	
     // Display
     let backlight = Backlight::new(p.P0_14.degrade(), p.P0_22.degrade(), p.P0_23.degrade());
     let rst = Output::new(p.P0_26, Level::Low, OutputDrive::Standard);
@@ -222,6 +226,7 @@ async fn main(s: Spawner) {
         touchpad,
         hrs,
         firmware_validator,
+        vibrator,
     };
 
     let mut state = WatchState::default();
