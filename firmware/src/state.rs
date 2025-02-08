@@ -1,6 +1,6 @@
 use defmt::info;
 use embassy_futures::select::{select, select3, Either, Either3};
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Instant, Ticker, Timer};
 use embedded_graphics::prelude::*;
 use watchful_ui::{FirmwareDetails, MenuAction, MenuView, TimeView, WorkoutView};
 
@@ -244,6 +244,7 @@ impl WorkoutState {
         let screen = &mut device.screen;
         let button = &mut device.button;
         let hrs = &mut device.hrs;
+        let mut ticker = Ticker::every(Duration::from_secs(2));
         hrs.init().unwrap();
         hrs.enable_hrs().unwrap();
         hrs.enable_oscillator().unwrap();
@@ -256,7 +257,7 @@ impl WorkoutState {
                     .draw(screen.display())
                     .unwrap();
                 screen.on();
-                Timer::after(Duration::from_secs(2)).await;
+                ticker.next().await;
                 seconds += 2;
             }
         };
