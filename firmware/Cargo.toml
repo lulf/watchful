@@ -21,7 +21,7 @@ embedded-storage-async = "0.4"
 embedded-hal = "1.0"
 embedded-hal-async = "1.0"
 embedded-hal-bus = "0.2"
-nrf-dfu-target = { version = "0.3.1", features = ["defmt"] }
+nrf-dfu-target = { version = "0.3.2", features = ["defmt"] }
 pinetime-flash = { version = "0.1.0", path = "../pinetime-flash", features = ["defmt"] }
 watchful-ui = { version = "0.1.0", path = "../watchful-ui", features = ["defmt"] }
 cst816s = "0.1.4"
@@ -60,6 +60,7 @@ hrs3300 = { git = "https://github.com/lulf/hrs3300-rs.git", branch = "hal-1.0" }
 nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "1dd59a3bc60309cb7f12ca2ba52566d63225a394" }
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "1dd59a3bc60309cb7f12ca2ba52566d63225a394" }
 trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "07fa452e836f07a302596edb6a61e060d242e4ea" }
+#nrf-dfu-target = { path = "../../nrf-dfu" }
 #trouble-host = { path = "../../trouble/host" }
 
 embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "fe79af56141adfeacb3cfcefc4400da0c5aabb5f" }
