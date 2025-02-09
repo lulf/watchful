@@ -29,6 +29,7 @@ pub struct Device<'a> {
     pub touchpad: Touchpad<'static>,
     pub hrs: Hrs<'static>,
     pub firmware_validator: FirmwareValidator<'static>,
+	pub vibrator: Vibrator<'static>,
 }
 
 impl<'a> Device<'a> {}
@@ -75,6 +76,26 @@ impl<'a> Battery<'a> {
 
     pub fn is_charging(&mut self) -> bool {
         self.charging.is_low()
+    }
+}
+
+pub struct Vibrator<'a> {
+    motor: Output<'a>,
+}
+
+impl<'a> Vibrator<'a> {
+    pub fn new(motor: Output<'a>) -> Self {
+        Self { motor }
+    }
+
+    pub async fn on_for(&mut self, ms: u64) {
+        self.motor.set_low();
+        Timer::after(Duration::from_millis(ms)).await;
+        self.motor.set_high();
+    }
+
+    pub fn off(&mut self) {
+        self.motor.set_high();
     }
 }
 
