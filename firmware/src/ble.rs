@@ -1,7 +1,7 @@
 use defmt::{info, unwrap, warn};
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
-use embassy_time::{with_timeout, Duration};
+use embassy_time::{with_timeout, Duration, Timer};
 use embedded_storage_async::nor_flash::NorFlash;
 use heapless::Vec;
 use nrf_dfu_target::prelude::{DfuRequest, DfuStatus, DfuTarget, FirmwareInfo, FirmwareType, HardwareInfo};
@@ -314,6 +314,7 @@ async fn process(
 
                     if let Some(DfuStatus::DoneReset) = result {
                         warn!("DFU done! Supposed to reset!");
+                        Timer::after(Duration::from_secs(4)).await;
                         cortex_m::peripheral::SCB::sys_reset();
                     }
                 }
