@@ -16,7 +16,7 @@ use u8g2_fonts::{fonts, U8g2TextStyle};
 
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 240;
-const GRID_ITEMS: u32 = 3;
+const GRID_ITEMS: u32 = 4;
 
 fn watch_text_style(color: Rgb) -> U8g2TextStyle<Rgb> {
     //U8g2TextStyle::new(fonts::u8g2_font_unifont_t_symbols, Rgb::YELLOW)
@@ -187,10 +187,58 @@ impl WorkoutView {
     }
 }
 
+#[derive(PartialEq, Copy, Clone)]
+pub struct TimerView {
+    pub remaining: time::Duration,
+    pub running: bool,
+}
+
+impl TimerView {
+    pub fn new(remaining: time::Duration, running: bool) -> Self {
+        Self { remaining, running }
+    }
+    pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
+        display.clear(Rgb::BLACK)?;
+        
+        let mut buf: heapless::String<16> = heapless::String::new();
+        write!(
+            buf,
+            //"{:02}:{:02}:{:02}",
+            "{:02}:{:02}",
+            //self.remaining.whole_hours(),
+            self.remaining.whole_minutes(),
+            self.remaining.whole_seconds() % 60,
+            //self.remaining.subsec_milliseconds() / 100
+        )
+        .unwrap();
+
+		let cd = Text::with_text_style(
+            &buf,
+            display.bounding_box().center(),
+            watch_text_style(Rgb::CSS_DARK_CYAN),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .baseline(embedded_graphics::text::Baseline::Alphabetic)
+                .build(),
+        );
+
+        let display_area = display.bounding_box();
+        LinearLayout::vertical(Chain::new(cd))
+            .with_spacing(spacing::FixedMargin(10))
+            .with_alignment(horizontal::Center)
+            .arrange()
+            .align_to(&display_area, horizontal::Center, vertical::Center)
+            .draw(display)?;
+
+		Ok(())
+	}
+}
+
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MenuAction {
     Workout,
+    Timer,
     FindPhone,
     Settings,
     FirmwareSettings,
@@ -203,6 +251,7 @@ pub enum MenuAction {
 pub enum MenuView {
     Main {
         workout: MenuItem,
+        timer: MenuItem,
         find_phone: MenuItem,
         settings: MenuItem,
     },
@@ -221,8 +270,9 @@ impl MenuView {
     pub fn main() -> Self {
         Self::Main {
             workout: MenuItem::new("Workout", 0),
-            find_phone: MenuItem::new("Find Phone", 1),
-            settings: MenuItem::new("Settings", 2),
+            timer: MenuItem::new("Timer", 1),
+            find_phone: MenuItem::new("Find Phone", 2),
+            settings: MenuItem::new("Settings", 3),
         }
     }
 
@@ -238,7 +288,7 @@ impl MenuView {
         let valid = details.validated;
         Self::Firmware {
             details,
-            item: MenuItem::new(if valid { "Validated" } else { "Validate" }, 2),
+            item: MenuItem::new(if valid { "Validated" } else { "Validate" }, 3),
         }
     }
 
@@ -248,10 +298,12 @@ impl MenuView {
         match self {
             Self::Main {
                 workout,
+                timer,
                 find_phone,
                 settings,
             } => {
                 workout.draw(display)?;
+                timer.draw(display)?;
                 find_phone.draw(display)?;
                 settings.draw(display)?;
             }
@@ -275,11 +327,14 @@ impl MenuView {
         match self {
             Self::Main {
                 workout,
+                timer,
                 find_phone,
                 settings,
             } => {
                 if workout.is_clicked(input) {
                     Some(MenuAction::Workout)
+                } else if timer.is_clicked(input) {
+                    Some(MenuAction::Timer)
                 } else if find_phone.is_clicked(input) {
                     Some(MenuAction::FindPhone)
                 } else if settings.is_clicked(input) {
@@ -336,7 +391,7 @@ impl MenuItem {
             self.text,
             Point::new(
                 (WIDTH as i32) / 2,
-                self.idx as i32 * (HEIGHT as i32 / GRID_ITEMS as i32) + 47,
+                self.idx as i32 * (HEIGHT as i32 / GRID_ITEMS as i32) + 40,
             ),
             menu_text_style(Rgb::CSS_CORNSILK),
             TextStyleBuilder::new()
