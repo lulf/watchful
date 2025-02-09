@@ -24,7 +24,7 @@ impl<'d> FirmwareValidator<'d> {
     pub async fn validate(&self) {
         if !self.is_valid() {
             let mut flash = self.flash.lock().await;
-            if let Err(e) = flash.write(VALID_BIT_ADDRESS, &VALID_BIT_VALUE.to_le_bytes()).await {
+            if let Err(_e) = flash.write(VALID_BIT_ADDRESS, &VALID_BIT_VALUE.to_le_bytes()).await {
                 defmt::warn!("Error validating firmware");
             }
         }

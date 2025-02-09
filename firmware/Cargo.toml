@@ -1,7 +1,7 @@
 [package]
 edition = "2021"
 name = "watchful"
-version = "0.2.6"
+version = "0.3.0"
 license = "MIT OR Apache-2.0"
 build = "build.rs"
 resolver = "2"
@@ -9,11 +9,11 @@ resolver = "2"
 [dependencies]
 embassy-futures = { version = "0.1" }
 futures = { version = "0.3", default-features = false, features = ["async-await"]}
-embassy-embedded-hal = { version = "0.2", default-features = false }
+embassy-embedded-hal = { version = "0.3", default-features = false }
 embassy-sync = { version = "0.6" }
-embassy-executor = { version = "0.6", features = ["arch-cortex-m", "executor-thread", "defmt", "integrated-timers", "nightly"] }
-embassy-time = { version = "0.3", features = ["defmt", "defmt-timestamp-uptime"] }
-embassy-nrf = { version = "0.2", features = ["defmt", "nrf52832", "time-driver-rtc1", "rt", "gpiote", "unstable-pac", "time", "nfc-pins-as-gpio"] }
+embassy-executor = { version = "0.7", features = ["arch-cortex-m", "executor-thread", "defmt", "nightly"] }
+embassy-time = { version = "0.4", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-nrf = { version = "0.3", features = ["defmt", "nrf52832", "time-driver-rtc1", "rt", "gpiote", "unstable-pac", "time", "nfc-pins-as-gpio"] }
 embedded-io = "0.6"
 embedded-io-async = "0.6"
 embedded-storage = "0.3"
@@ -21,7 +21,7 @@ embedded-storage-async = "0.4"
 embedded-hal = "1.0"
 embedded-hal-async = "1.0"
 embedded-hal-bus = "0.2"
-nrf-dfu-target = { version = "0.3.1", features = ["defmt"] }
+nrf-dfu-target = { version = "0.3.2", features = ["defmt"] }
 pinetime-flash = { version = "0.1.0", path = "../pinetime-flash", features = ["defmt"] }
 watchful-ui = { version = "0.1.0", path = "../watchful-ui", features = ["defmt"] }
 cst816s = "0.1.4"
@@ -57,19 +57,19 @@ vergen = { version = "8", features = ["build", "git", "gitcl"] }
 
 [patch.crates-io]
 hrs3300 = { git = "https://github.com/lulf/hrs3300-rs.git", branch = "hal-1.0" }
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "1dd59a3bc60309cb7f12ca2ba52566d63225a394" }
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "1dd59a3bc60309cb7f12ca2ba52566d63225a394" }
-trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "07fa452e836f07a302596edb6a61e060d242e4ea" }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
+trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "54cd0465ca497495b5890d896fc1f048f0a0f1ee" }
+#nrf-dfu-target = { path = "../../nrf-dfu" }
 #trouble-host = { path = "../../trouble/host" }
 
-embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "fe79af56141adfeacb3cfcefc4400da0c5aabb5f" }
-embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git", rev = "fe79af56141adfeacb3cfcefc4400da0c5aabb5f" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "fe79af56141adfeacb3cfcefc4400da0c5aabb5f" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "fe79af56141adfeacb3cfcefc4400da0c5aabb5f" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "fe79af56141adfeacb3cfcefc4400da0c5aabb5f" }
-embassy-time-queue-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "fe79af56141adfeacb3cfcefc4400da0c5aabb5f" }
-embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "fe79af56141adfeacb3cfcefc4400da0c5aabb5f" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "fe79af56141adfeacb3cfcefc4400da0c5aabb5f" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "bcebe4c4d5b597da0b8741916e450c46e6fef06e" }
+embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git", rev = "bcebe4c4d5b597da0b8741916e450c46e6fef06e" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "bcebe4c4d5b597da0b8741916e450c46e6fef06e" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "bcebe4c4d5b597da0b8741916e450c46e6fef06e" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "bcebe4c4d5b597da0b8741916e450c46e6fef06e" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "bcebe4c4d5b597da0b8741916e450c46e6fef06e" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "bcebe4c4d5b597da0b8741916e450c46e6fef06e" }
 
 [profile.release]
 debug = 2
