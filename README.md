@@ -74,7 +74,7 @@ probe-rs download watchful-image.bin --binary-format Binary --base-address 0x800
 
 ## Recovering from older versions of Watchful
 
-NOTE: If you've used watchful before, it now has switched from using `embassy-boot` to `mcuboot` as provided by default on InfiniTime. To achieve that, the [nrf-softdevice](https://github.com/embassy-rs/nrf-softdevice/) has been replaced with [trouble](https://github.com/embassy-rs/trouble). 
+NOTE: If you've used watchful before 0.2.6, it now has switched from using `embassy-boot` to `mcuboot` as provided by default on InfiniTime. To achieve that, the [nrf-softdevice](https://github.com/embassy-rs/nrf-softdevice/) has been replaced with [trouble](https://github.com/embassy-rs/trouble).
 
 The `infinitime-recovery` app allows you to move from previous versions of Watchful to the new.
 
