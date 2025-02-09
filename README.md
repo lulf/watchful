@@ -16,7 +16,7 @@ Firmware for Pinetime based on [Embassy](https://embassy.dev). The goal is to pr
 * Automatically synchronizes time with using BLE standard Current Time Service.
 * Rollback to previous firmware if reset or crashing before new firmware is validated in watch UI.
 * Compatible with existing InfiniTime bootloader.
-* DFU: Implements Nordic DFU protocol so you can update from a phone app such as nRF Connect to perform firmware updates.
+* Implements Nordic and InfiniTime DFU protocols so you can update from a phone app such as nRF Connect to perform firmware updates.
 
 ## Getting started
 

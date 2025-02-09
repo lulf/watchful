@@ -54,6 +54,7 @@ bind_interrupts!(struct Irqs {
 });
 
 static CLOCK: clock::Clock = clock::Clock::new();
+static BATTERY: StaticCell<device::Battery<'static>> = StaticCell::new();
 
 type ExternalFlash = XtFlash<SpiDevice<'static, NoopRawMutex, Spim<'static, TWISPI0>, Output<'static>>>;
 
@@ -149,6 +150,7 @@ async fn main(s: Spawner) {
     adc_config.resolution = saadc::Resolution::_10BIT;
     let saadc = saadc::Saadc::new(p.SAADC, Irqs, adc_config, [bat_config]);
     let battery = Battery::new(saadc, Input::new(p.P0_12.degrade(), Pull::Up));
+    let battery = BATTERY.init(battery);
 
     // Touch peripheral
     let mut twim_config = twim::Config::default();
@@ -196,12 +198,12 @@ async fn main(s: Spawner) {
     let firmware_validator = FirmwareValidator::new(internal_flash);
 
     // BLE
-    ble::start(s, sdc, dfu_config);
-    
+    ble::start(s, sdc, dfu_config, battery);
+
     // Vibration
     let motor = Output::new(p.P0_16, Level::High, OutputDrive::Standard0Disconnect1);
     let vibrator = Vibrator::new(motor);
-	
+
     // Display
     let backlight = Backlight::new(p.P0_14.degrade(), p.P0_22.degrade(), p.P0_23.degrade());
     let rst = Output::new(p.P0_26, Level::Low, OutputDrive::Standard);

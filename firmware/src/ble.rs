@@ -10,6 +10,7 @@ use trouble_host::attribute::Characteristic;
 use trouble_host::gatt::GattEvent;
 use trouble_host::prelude::*;
 
+use crate::device::Battery;
 use crate::DfuConfig;
 
 pub const ATT_MTU: usize = L2CAP_MTU - 4 - 3;
@@ -39,6 +40,16 @@ impl NrfUartService {
 }
 */
 
+// Battery service
+#[gatt_service(uuid = service::BATTERY)]
+struct BatteryService {
+    /// Battery Level
+    #[descriptor(uuid = descriptors::VALID_RANGE, read, value = [0, 100])]
+    #[descriptor(uuid = descriptors::MEASUREMENT_DESCRIPTION, read, value = "Battery Level")]
+    #[characteristic(uuid = characteristic::BATTERY_LEVEL, read, notify)]
+    level: u8,
+}
+
 #[gatt_service(uuid = "FE59")]
 pub struct NrfDfuService {
     #[characteristic(uuid = "8EC90001-F315-4F60-9FB8-838830DAEA50", write, notify)]
@@ -51,25 +62,27 @@ pub struct NrfDfuService {
     packet: Vec<u8, ATT_MTU>,
 }
 
-#[gatt_service(uuid = "23D1BCEA-5F78-2315-DEEF-121230150000")]
-pub struct InfinitimeDfuService {
-    #[characteristic(uuid = "23D1BCEA-5F78-2315-DEEF-121231150000", write, notify)]
-    control: Vec<u8, ATT_MTU>,
-
-    #[characteristic(uuid = "23D1BCEA-5F78-2315-DEEF-121231150000", read)] //, value = "8")]
-    revision: u16,
-
-    /// The maximum size of each packet is derived from the Att MTU size of the connection.
-    /// The maximum Att MTU size of the DFU Service is 256 bytes (saved in NRF_SDH_BLE_GATT_MAX_MTU_SIZE),
-    /// making the maximum size of the DFU Packet characteristic 253 bytes. (3 bytes are used for opcode and handle ID upon writing.)
-    #[characteristic(uuid = "23D1BCEA-5F78-2315-DEEF-121232150000", write_without_response)]
-    packet: Vec<u8, ATT_MTU>,
-}
+// NOTE: Disabled as it doesn't properly deal with init/start specific to infinitime protocol
+//#[gatt_service(uuid = "23D1BCEA-5F78-2315-DEEF-121230150000")]
+//pub struct InfinitimeDfuService {
+//    #[characteristic(uuid = "23D1BCEA-5F78-2315-DEEF-121231150000", write, notify)]
+//    control: Vec<u8, ATT_MTU>,
+//
+//    #[characteristic(uuid = "23D1BCEA-5F78-2315-DEEF-121234150000", read, value = 8)]
+//    revision: u16,
+//
+//    /// The maximum size of each packet is derived from the Att MTU size of the connection.
+//    /// The maximum Att MTU size of the DFU Service is 256 bytes (saved in NRF_SDH_BLE_GATT_MAX_MTU_SIZE),
+//    /// making the maximum size of the DFU Packet characteristic 253 bytes. (3 bytes are used for opcode and handle ID upon writing.)
+//    #[characteristic(uuid = "23D1BCEA-5F78-2315-DEEF-121232150000", write_without_response)]
+//    packet: Vec<u8, ATT_MTU>,
+//}
 
 #[gatt_server]
 pub struct PineTimeServer {
     nrfdfu: NrfDfuService,
-    infdfu: InfinitimeDfuService,
+    battery: BatteryService,
+    //   infdfu: InfinitimeDfuService,
     // uart: NrfUartService,
 }
 
@@ -135,17 +148,17 @@ impl PineTimeServer<'_> {
         if handle == self.nrfdfu.control.handle {
             self.handle_dfu_control(target, dfu, connection, &self.nrfdfu.control)
                 .await
-        } else if handle == self.infdfu.control.handle {
-            self.handle_dfu_control(target, dfu, connection, &self.infdfu.control)
-                .await
+        //        } else if handle == self.infdfu.control.handle {
+        //            self.handle_dfu_control(target, dfu, connection, &self.infdfu.control)
+        //                .await
         } else if handle == self.nrfdfu.packet.handle {
             self.handle_dfu_packet(target, dfu, connection, &self.nrfdfu.control, &self.nrfdfu.packet)
                 .await
-        } else if handle == self.infdfu.packet.handle {
-            self.handle_dfu_packet(target, dfu, connection, &self.infdfu.control, &self.infdfu.packet)
-                .await
+        //        } else if handle == self.infdfu.packet.handle {
+        //            self.handle_dfu_packet(target, dfu, connection, &self.infdfu.control, &self.infdfu.packet)
+        //                .await
         } else {
-            warn!("unknown handle {}!", handle);
+            // Ignore, no need to handle
             None
         }
     }
@@ -171,7 +184,12 @@ fn ble_addr() -> Address {
 
 const NAME: &str = "Watchful";
 
-pub fn start(spawner: Spawner, controller: NrfController, dfu_config: DfuConfig<'static>) {
+pub fn start(
+    spawner: Spawner,
+    controller: NrfController,
+    dfu_config: DfuConfig<'static>,
+    battery: &'static Battery<'static>,
+) {
     let resources = RESOURCES.init(BleResources::new());
     let stack = STACK.init(trouble_host::new(controller, resources).set_random_address(ble_addr()));
 
@@ -187,7 +205,7 @@ pub fn start(spawner: Spawner, controller: NrfController, dfu_config: DfuConfig<
     let server = SERVER.init(gatt);
 
     spawner.must_spawn(ble_task(runner));
-    spawner.must_spawn(advertise_task(stack, peripheral, server, dfu_config));
+    spawner.must_spawn(advertise_task(stack, peripheral, server, dfu_config, battery));
 }
 
 #[embassy_executor::task]
@@ -201,12 +219,15 @@ async fn advertise_task(
     mut peripheral: Peripheral<'static, NrfController>,
     server: &'static PineTimeServer<'static>,
     mut dfu_config: DfuConfig<'static>,
+    battery: &'static Battery<'static>,
 ) {
+    const BAS: [u8; 2] = [0x0F, 0x18];
+    const DFU: [u8; 2] = [0x59, 0xFE];
     let mut advertiser_data = [0; 31];
     unwrap!(AdStructure::encode_slice(
         &[
             AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-            AdStructure::ServiceUuids16(&[Uuid::Uuid16([0x59, 0xFE])]),
+            AdStructure::ServiceUuids16(&[Uuid::Uuid16(BAS), Uuid::Uuid16(DFU)]),
             AdStructure::CompleteLocalName(NAME.as_bytes()),
         ],
         &mut advertiser_data[..],
@@ -225,7 +246,7 @@ async fn advertise_task(
                 .await
         );
         match advertiser.accept().await {
-            Ok(conn) => process(stack, conn, server, &mut dfu_config).await,
+            Ok(conn) => process(stack, conn, server, &mut dfu_config, battery).await,
             Err(e) => {
                 warn!("Error advertising: {:?}", e);
             }
@@ -238,6 +259,7 @@ async fn process(
     connection: Connection<'static>,
     server: &'static PineTimeServer<'_>,
     dfu_config: &mut DfuConfig<'static>,
+    battery: &'static Battery<'static>,
 ) {
     let ficr = embassy_nrf::pac::FICR;
     let part = ficr.info().part().read().part().to_bits();
@@ -273,6 +295,17 @@ async fn process(
                 break;
             }
             ConnectionEvent::Gatt { data } => match data.process(server).await {
+                Ok(Some(GattEvent::Read(event))) => {
+                    let handle = event.handle();
+                    if handle == server.battery.level.handle {
+                        let value = battery.measure().await.max(100) as u8;
+                        if let Err(_) = server.battery.level.set(server, &value) {
+                            warn!("error updating battery level");
+                        }
+                    }
+                    let reply = unwrap!(event.accept());
+                    reply.send().await;
+                }
                 Ok(Some(GattEvent::Write(event))) => {
                     let handle = event.handle();
                     let reply = unwrap!(event.accept());

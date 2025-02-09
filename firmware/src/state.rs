@@ -221,7 +221,7 @@ impl MenuState {
                 MenuAction::FirmwareSettings => {
                     let validated = device.firmware_validator.is_valid();
                     WatchState::Menu(MenuState::new(MenuView::firmware_settings(
-                        firmware_details(&mut device.battery, validated).await,
+                        firmware_details(device.battery, validated).await,
                     )))
                 }
                 MenuAction::ValidateFirmware => {
@@ -272,7 +272,7 @@ impl WorkoutState {
     }
 }
 
-async fn firmware_details(battery: &mut crate::device::Battery<'_>, validated: bool) -> FirmwareDetails {
+async fn firmware_details(battery: &crate::device::Battery<'_>, validated: bool) -> FirmwareDetails {
     const CARGO_NAME: &str = env!("CARGO_PKG_NAME");
     const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
     const COMMIT: &str = env!("VERGEN_GIT_SHA");
