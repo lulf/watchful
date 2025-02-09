@@ -7,6 +7,7 @@ use embassy_nrf::peripherals::{TWISPI0, TWISPI1};
 use embassy_nrf::spim::Spim;
 use embassy_nrf::{saadc, twim};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
 use mipidsi::models::ST7789;
 
@@ -25,11 +26,11 @@ pub struct Device<'a> {
     pub clock: &'a Clock,
     pub screen: Screen<'static>,
     pub button: Button,
-    pub battery: Battery<'static>,
+    pub battery: &'a Battery<'static>,
     pub touchpad: Touchpad<'static>,
     pub hrs: Hrs<'static>,
     pub firmware_validator: FirmwareValidator<'static>,
-	pub vibrator: Vibrator<'static>,
+    pub vibrator: Vibrator<'static>,
 }
 
 impl<'a> Device<'a> {}
@@ -59,22 +60,27 @@ impl Button {
 
 pub struct Battery<'a> {
     charging: Input<'a>,
-    adc: saadc::Saadc<'a, 1>,
+    adc: Mutex<NoopRawMutex, saadc::Saadc<'a, 1>>,
 }
 
 impl<'a> Battery<'a> {
     pub fn new(adc: saadc::Saadc<'a, 1>, charging: Input<'a>) -> Self {
-        Self { adc, charging }
+        Self {
+            adc: Mutex::new(adc),
+            charging,
+        }
     }
-    pub async fn measure(&mut self) -> u32 {
+
+    pub async fn measure(&self) -> u32 {
         let mut buf = [0i16; 1];
-        self.adc.sample(&mut buf).await;
+        let mut adc = self.adc.lock().await;
+        adc.sample(&mut buf).await;
         let voltage = buf[0] as u32 * (8 * 600) / 1024;
         //let voltage = buf[0] as u32 * 2000 / 1241;
         approximate_charge(voltage)
     }
 
-    pub fn is_charging(&mut self) -> bool {
+    pub fn is_charging(&self) -> bool {
         self.charging.is_low()
     }
 }
