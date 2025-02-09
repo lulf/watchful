@@ -158,8 +158,9 @@ pub const L2CAP_RXQ: u8 = 10;
 
 const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 2; // Signal + att
-type BleResources = HostResources<NrfController, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, L2CAP_MTU>;
+type BleResources = HostResources<CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, L2CAP_MTU>;
 static RESOURCES: StaticCell<BleResources> = StaticCell::new();
+static STACK: StaticCell<Stack<'static, NrfController>> = StaticCell::new();
 
 fn ble_addr() -> Address {
     let ficr = embassy_nrf::pac::FICR;
@@ -168,13 +169,13 @@ fn ble_addr() -> Address {
     Address::random(unwrap!(addr.to_le_bytes()[..6].try_into()))
 }
 
-const NAME: &str = "WatchTest";
+const NAME: &str = "Watchful";
 
 pub fn start(spawner: Spawner, controller: NrfController, dfu_config: DfuConfig<'static>) {
-    let resources = RESOURCES.init(BleResources::new(PacketQos::None));
-    let (stack, peripheral, _, runner) = trouble_host::new(controller, resources)
-        .set_random_address(ble_addr())
-        .build();
+    let resources = RESOURCES.init(BleResources::new());
+    let stack = STACK.init(trouble_host::new(controller, resources).set_random_address(ble_addr()));
+
+    let Host { peripheral, runner, .. } = stack.build();
 
     let gatt = unwrap!(PineTimeServer::new_with_config(GapConfig::Peripheral(
         PeripheralConfig {
@@ -196,7 +197,7 @@ async fn ble_task(mut runner: Runner<'static, NrfController>) {
 
 #[embassy_executor::task]
 async fn advertise_task(
-    stack: Stack<'static, NrfController>,
+    stack: &'static Stack<'static, NrfController>,
     mut peripheral: Peripheral<'static, NrfController>,
     server: &'static PineTimeServer<'static>,
     mut dfu_config: DfuConfig<'static>,
@@ -233,7 +234,7 @@ async fn advertise_task(
 }
 
 async fn process(
-    stack: Stack<'static, NrfController>,
+    stack: &'static Stack<'static, NrfController>,
     connection: Connection<'static>,
     server: &'static PineTimeServer<'_>,
     dfu_config: &mut DfuConfig<'static>,
@@ -290,7 +291,7 @@ async fn process(
 }
 
 #[embassy_executor::task]
-async fn sync_time(stack: Stack<'static, NrfController>, conn: Connection<'static>) {
+async fn sync_time(stack: &'static Stack<'static, NrfController>, conn: Connection<'static>) {
     info!("[ble] synchronizing time");
     let client = unwrap!(GattClient::<_, 10, ATT_MTU>::new(stack, &conn).await);
     match select(
