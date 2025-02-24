@@ -2,7 +2,7 @@ use defmt::info;
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use embedded_graphics::prelude::*;
-use watchful_ui::{FirmwareDetails, MenuAction, MenuView, TimerView, TimeView, WorkoutView};
+use watchful_ui::{FirmwareDetails, MenuAction, MenuView, TimeDetails, TimerView, TimeView, WorkoutView};
 
 use crate::device::Device;
 
@@ -223,6 +223,11 @@ impl MenuState {
                     device.screen.change_brightness();
                     WatchState::Menu(MenuState::new(MenuView::settings()))
                 }
+                MenuAction::TimeSettings => {
+                    WatchState::Menu(MenuState::new(MenuView::time_settings(
+                    	time_details(device).await,
+                    )))
+                }
                 MenuAction::Reset => {
                     cortex_m::peripheral::SCB::sys_reset();
                 }
@@ -237,6 +242,54 @@ impl MenuState {
                     device.firmware_validator.validate().await;
                     info!("Firmware marked as valid");
                     WatchState::Menu(MenuState::new(MenuView::main()))
+                }
+                MenuAction::ChangeTimeMinInc => {
+                    let new_time = device.clock.get()
+                    	.checked_add(time::Duration::new(60, 0));
+					match new_time {
+    					Some(time) => device.clock.set(time),
+    					None => { info!("Incremented time 1 minute too many"); }
+					}
+					
+                    WatchState::Menu(MenuState::new(MenuView::time_settings(
+                    	time_details(device).await,
+                    )))
+                }
+                MenuAction::ChangeTimeHourInc => {
+                    let new_time = device.clock.get()
+                    	.checked_add(time::Duration::new(3600, 0));
+					match new_time {
+    					Some(time) => device.clock.set(time),
+    					None => { info!("Incremented time 1 hour too many"); }
+					}
+					
+                    WatchState::Menu(MenuState::new(MenuView::time_settings(
+                    	time_details(device).await,
+                    )))
+                }
+                MenuAction::ChangeTimeMinDec => {
+                    let new_time = device.clock.get()
+                    	.checked_sub(time::Duration::new(60, 0));
+					match new_time {
+    					Some(time) => device.clock.set(time),
+    					None => { info!("Decremented time 1 minute too many"); }
+					}
+					
+                    WatchState::Menu(MenuState::new(MenuView::time_settings(
+                    	time_details(device).await,
+                    )))
+                }
+                MenuAction::ChangeTimeHourDec => {
+                    let new_time = device.clock.get()
+                    	.checked_sub(time::Duration::new(3600, 0));
+					match new_time {
+    					Some(time) => device.clock.set(time),
+    					None => { info!("Decremented time 1 hour too many"); }
+					}
+					
+                    WatchState::Menu(MenuState::new(MenuView::time_settings(
+                    	time_details(device).await,
+                    )))
                 }
             },
         }
@@ -342,5 +395,11 @@ async fn firmware_details(battery: &crate::device::Battery<'_>, validated: bool)
         battery_level,
         battery_charging,
         validated,
+    )
+}
+
+async fn time_details(device: &mut Device<'_>) -> TimeDetails {
+    TimeDetails::new(
+        device.clock.get(),
     )
 }
