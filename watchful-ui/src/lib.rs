@@ -13,6 +13,7 @@ use embedded_layout::prelude::*;
 use embedded_text::style::TextBoxStyleBuilder;
 use embedded_text::TextBox;
 use u8g2_fonts::{fonts, U8g2TextStyle};
+use time::PrimitiveDateTime;
 
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 240;
@@ -244,6 +245,11 @@ pub enum MenuAction {
     FirmwareSettings,
     ValidateFirmware,
     Brightness,
+    TimeSettings,
+    ChangeTimeMinInc,
+    ChangeTimeHourInc,
+    ChangeTimeMinDec,
+    ChangeTimeHourDec,
     Reset,
 }
 
@@ -258,11 +264,19 @@ pub enum MenuView {
     Settings {
         firmware: MenuItem,
         brightness: MenuItem,
+        time_settings: MenuItem,
         reset: MenuItem,
     },
     Firmware {
         details: FirmwareDetails,
         item: MenuItem,
+    },
+    TimeSettings {
+    	details: TimeDetails,
+        min_inc: MenuControl,
+        hour_inc: MenuControl,
+        min_dec: MenuControl,
+        hour_dec: MenuControl,
     },
 }
 
@@ -280,7 +294,8 @@ impl MenuView {
         Self::Settings {
             firmware: MenuItem::new("Firmware", 0),
             brightness: MenuItem::new("Brightness", 1),
-            reset: MenuItem::new("Reset", 2),
+            time_settings: MenuItem::new("Time", 2),
+            reset: MenuItem::new("Reset", 3),
         }
     }
 
@@ -292,6 +307,16 @@ impl MenuView {
         }
     }
 
+    pub fn time_settings(details: TimeDetails) -> Self {
+        Self::TimeSettings {
+            details,
+            hour_inc: MenuControl::new("+", 0),
+            min_inc: MenuControl::new("+", 1),
+            hour_dec: MenuControl::new("-", 2),
+            min_dec: MenuControl::new("-", 3),
+        }
+    }
+    
     pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
         display.clear(Rgb::BLACK)?;
 
@@ -308,15 +333,24 @@ impl MenuView {
                 settings.draw(display)?;
             }
 
-            Self::Settings { firmware, brightness, reset } => {
+            Self::Settings { firmware, brightness, time_settings, reset } => {
                 firmware.draw(display)?;
                 brightness.draw(display)?;
+                time_settings.draw(display)?;
                 reset.draw(display)?;
             }
 
             Self::Firmware { details, item } => {
                 details.draw(display)?;
                 item.draw(display)?;
+            }
+
+			Self::TimeSettings { details, min_inc, hour_inc, min_dec, hour_dec } => {
+                details.draw(display)?;
+                min_inc.draw(display)?;
+                hour_inc.draw(display)?;
+                min_dec.draw(display)?;
+                hour_dec.draw(display)?;
             }
         }
 
@@ -343,11 +377,13 @@ impl MenuView {
                     None
                 }
             }
-            Self::Settings { firmware, brightness, reset } => {
+            Self::Settings { firmware, brightness, time_settings, reset } => {
                 if firmware.is_clicked(input) {
                     Some(MenuAction::FirmwareSettings)
                 } else if brightness.is_clicked(input) {
                     Some(MenuAction::Brightness)
+                } else if time_settings.is_clicked(input) {
+                	Some(MenuAction::TimeSettings)
                 } else if reset.is_clicked(input) {
                     Some(MenuAction::Reset)
                 } else {
@@ -357,6 +393,19 @@ impl MenuView {
             Self::Firmware { details: _, item } => {
                 if item.is_clicked(input) {
                     Some(MenuAction::ValidateFirmware)
+                } else {
+                    None
+                }
+            }
+            Self::TimeSettings { details: _, min_inc, hour_inc, min_dec, hour_dec } => {
+                if min_inc.is_clicked(input) {
+                    Some(MenuAction::ChangeTimeMinInc)
+                } else if hour_inc.is_clicked(input) {
+					Some(MenuAction::ChangeTimeHourInc)
+				} else if min_dec.is_clicked(input) {
+                    Some(MenuAction::ChangeTimeMinDec)
+                } else if hour_dec.is_clicked(input) {
+					Some(MenuAction::ChangeTimeHourDec)
                 } else {
                     None
                 }
@@ -409,6 +458,98 @@ impl MenuItem {
             start.y + (HEIGHT as i32 / GRID_ITEMS as i32) - 20,
         );
         (start, end)
+    }
+
+    // Check if point is within our range
+    pub fn is_clicked(&self, event: InputEvent) -> bool {
+        if let InputEvent::Touch(TouchGesture::SingleTap(pos)) = event {
+            let (c1, c2) = self.placement();
+            c1.x <= pos.x && c1.y <= pos.y && c2.x >= pos.x && c2.y >= pos.y
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub struct MenuControl {
+    text: &'static str,
+    idx: u32,
+}
+
+impl MenuControl {
+    pub fn new(text: &'static str, idx: u32) -> Self {
+        Self { text, idx }
+    }
+
+    pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
+        let line_style = PrimitiveStyleBuilder::new()
+            .stroke_color(Rgb::CSS_DARK_CYAN)
+            .stroke_width(1)
+            .fill_color(Rgb::CSS_DARK_CYAN)
+            .build();
+        let (start, end) = self.placement();
+        Rectangle::with_corners(start, end)
+            .into_styled(line_style)
+            .draw(display)?;
+
+        Text::with_text_style(
+            self.text,
+			Point::new(
+                (start.x + end.x) / 2,
+                (start.y + end.y) / 2 + 8,
+            ),
+            menu_text_style(Rgb::CSS_CORNSILK),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .build(),
+        )
+        .draw(display)?;
+        Ok(())
+    }
+
+    fn placement(&self) -> (Point, Point) {
+    	match self.idx {
+    		0 => {
+    			let start = Point::new(20, 20);
+    			let end = Point::new(
+    				WIDTH as i32 / 2 - 10,
+    				start.y + HEIGHT as i32 / 4 - 10
+    			);
+    			(start, end)
+    		}
+    		1 => {
+    			let start = Point::new(WIDTH as i32 / 2 + 10, 20);
+    			let end = Point::new(
+    				WIDTH as i32 - 20,
+    				start.y + HEIGHT as i32 / 4 - 10
+    			);
+    			(start, end)
+    		}
+    		2 => {
+    			let start = Point::new(
+    				20,
+    				HEIGHT as i32 / 2 + 50
+    			);
+    			let end = Point::new(
+    				WIDTH as i32 / 2 - 10,
+    				start.y + HEIGHT as i32 / 4 - 10
+    			);
+    			(start, end)
+    		}
+    		3 => {
+    			let start = Point::new(
+    				WIDTH as i32 / 2 + 10,
+    				HEIGHT as i32 / 2 + 50
+    			);
+    			let end = Point::new(
+    				WIDTH as i32 - 20,
+    				start.y + HEIGHT as i32 / 4 - 10
+    			);
+    			(start, end)
+    		}
+    		_ => (Point::new(0, 0), Point::new(0, 0))
+        }
     }
 
     // Check if point is within our range
@@ -483,5 +624,51 @@ impl FirmwareDetails {
 
         TextBox::with_textbox_style(&info, bounds, character_style, textbox_style).draw(display)?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub struct TimeDetails {
+    time: PrimitiveDateTime,
+}
+
+impl TimeDetails {
+    pub const fn new(
+        time: PrimitiveDateTime,
+    ) -> Self {
+        Self {
+            time,
+        }
+    }
+
+    pub fn draw<D: DrawTarget<Color = Rgb>>(&self, display: &mut D) -> Result<(), D::Error> {
+        let mut buf: heapless::String<16> = heapless::String::new();
+        write!(
+            buf,
+            "{:02}:{:02}",
+            self.time.hour(),
+            self.time.minute(),
+        )
+        .unwrap();
+
+		let cd = Text::with_text_style(
+            &buf,
+            display.bounding_box().center(),
+            watch_text_style(Rgb::CSS_DARK_CYAN),
+            TextStyleBuilder::new()
+                .alignment(embedded_graphics::text::Alignment::Center)
+                .baseline(embedded_graphics::text::Baseline::Alphabetic)
+                .build(),
+        );
+
+        let display_area = display.bounding_box();
+        LinearLayout::vertical(Chain::new(cd))
+            .with_spacing(spacing::FixedMargin(10))
+            .with_alignment(horizontal::Center)
+            .arrange()
+            .align_to(&display_area, horizontal::Center, vertical::Center)
+            .draw(display)?;
+
+		Ok(())
     }
 }
