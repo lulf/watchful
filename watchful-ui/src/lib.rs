@@ -685,7 +685,7 @@ impl TimeDetails {
         )
         .unwrap();
 
-		let cd = Text::with_text_style(
+		let hm = Text::with_text_style(
             &buf,
             display.bounding_box().center(),
             watch_text_style(Rgb::CSS_DARK_CYAN),
@@ -696,7 +696,7 @@ impl TimeDetails {
         );
 
         let display_area = display.bounding_box();
-        LinearLayout::vertical(Chain::new(cd))
+        LinearLayout::vertical(Chain::new(hm))
             .with_spacing(spacing::FixedMargin(10))
             .with_alignment(horizontal::Center)
             .arrange()
