@@ -66,8 +66,15 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
         let mut value: [u8; 4] = [OpCode::ReadId as u8, 0, 0, 0];
         spi.transfer_in_place(&mut value[..])?;
 
-        if value[1] != 0x0B {
-            return Err(Error::InvalidManufacturerId);
+        let manufacturer_id = value[1];
+        match manufacturer_id {
+            // XTX XT25F32B Flash Chip Manufacturer Id
+            0x0B => {}
+            // BY25Q32ESWIG Flash Chip Manufacturer Id
+            0x68 => {}
+            _ => {
+                return Err(Error::InvalidManufacturerId);
+            }
         }
 
         if value[2] != 0x40 {
