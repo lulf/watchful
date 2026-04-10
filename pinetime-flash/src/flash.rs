@@ -69,7 +69,7 @@ impl<SPI: SpiDevice> XtFlash<SPI> {
         let manufacturer_id = value[1];
         match manufacturer_id {
             // XTX XT25F32B Flash Chip Manufacturer Id
-            0x0b => {}
+            0x0B => {}
             // BY25Q32ESWIG Flash Chip Manufacturer Id
             0x68 => {}
             _ => {
